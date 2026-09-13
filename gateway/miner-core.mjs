@@ -33,4 +33,4 @@ export function mine(blake2b, header, target, start, step, count) {
   return { nonce: null, hashes: count };
 }
 export const nonceField = (nonce) => hexLE32(nonce) + '00000000';
-export function parseNotify(params) { return { id: params[0], prevHidden: params[1], coinb1: params[2], ntime: params[7], clean: !!params[8] }; }
+export function parseNotify(params) { return { id: params[0], prevHidden: params[1], coinb1: params[2], bits: params[6], ntime: params[7], clean: !!params[8] }; }

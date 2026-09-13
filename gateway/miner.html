@@ -36,6 +36,7 @@
   <label>username (address.name) <input id="user" placeholder="tb1p….tab"></label>
   <label>difficulty (blank = vardiff) <input id="diff" placeholder="0.001"></label>
   <label>workers <input id="workers" type="number" min="1" max="64"></label>
+  <label>windows only <span style="display:flex;gap:.5rem;align-items:center;text-transform:none;letter-spacing:0;color:var(--fg)"><input id="winonly" type="checkbox" style="width:auto"> sleep unless the job's bits are <input id="minbits" value="1d00ffff" style="width:7rem"></span></label>
   <button type="submit" id="go">start</button>
 </form>
 <div class="hero" id="hero"></div>
@@ -54,6 +55,10 @@ let gatewayPay = null;
 fetch(new URL('stats.json', location.href), { cache: 'no-store' }).then((r) => r.json()).then((s) => { gatewayPay = s.pay?.[0] ? s.pay[0] + '.tab' : null; if (gatewayPay) $('user').placeholder = gatewayPay; }).catch(() => {});
 $('diff').value = q.get('diff') ?? localStorage.getItem('datstr.diff') ?? '';
 $('workers').value = q.get('workers') ?? Math.max(1, (navigator.hardwareConcurrency || 4) - 1);
+$('winonly').checked = q.get('winonly') === '1' || localStorage.getItem('datstr.winonly') === '1';
+$('winonly').onchange = () => { localStorage.setItem('datstr.winonly', $('winonly').checked ? '1' : '0'); dispatch(); };
+let sleeping = false;
+const inWindow = () => !$('winonly').checked || !job?.bits || job.bits.toLowerCase() === $('minbits').value.trim().toLowerCase();
 const stats = { hashes: 0, accepted: 0, rejected: 0, diff: null, job: null, started: null, lastRate: 0 };
 let ws = null, workers = [], job = null, en1 = null, en2size = 8, en2 = null, target = null, jobKey = 0, pending = new Map(), nextId = 100, tick = null, windowHashes = [];
 const log = (s, cls) => { const el = $('log'); el.innerHTML += (cls ? `<${cls}>${esc(s)}</${cls}>` : esc(s)) + '\n'; el.scrollTop = el.scrollHeight; };
@@ -64,7 +69,7 @@ function render() {
   const span = windowHashes.length ? Math.max(1, (now - windowHashes[0][0]) / 1000) : 1;
   const rate = windowHashes.reduce((a, [, h]) => a + h, 0) / span; stats.lastRate = rate;
   $('hr').textContent = ws ? '~' + hr(rate) : '';
-  $('hero').innerHTML = [tile('Hashrate', ws ? '~' + hr(rate) : '-', `${workers.length} workers`), tile('Shares', `${stats.accepted}`, `${stats.rejected} rejected`), tile('Difficulty', stats.diff ?? '-', stats.diff ? `~${hr(stats.diff * 4294967296 / 10)} for a share every 10 s` : 'from the gateway'), tile('Job', stats.job ? esc(stats.job.slice(0, 10)) : '-', job ? 'mining' : 'waiting'), tile('Running', stats.started ? Math.floor((now - stats.started) / 1000) + ' s' : '-', `${stats.hashes.toLocaleString()} hashes`)].join('');
+  $('hero').innerHTML = [tile('Hashrate', ws ? '~' + hr(rate) : '-', `${workers.length} workers`), tile('Shares', `${stats.accepted}`, `${stats.rejected} rejected`), tile('Difficulty', stats.diff ?? '-', stats.diff ? `~${hr(stats.diff * 4294967296 / 10)} for a share every 10 s` : 'from the gateway'), tile('Job', stats.job ? esc(stats.job.slice(0, 10)) : '-', job ? (sleeping ? 'sleeping, bits ' + esc(job.bits) : (job.bits?.toLowerCase() === $('minbits').value.trim().toLowerCase() ? 'min-difficulty window' : 'bits ' + esc(job.bits))) : 'waiting'), tile('Running', stats.started ? Math.floor((now - stats.started) / 1000) + ' s' : '-', `${stats.hashes.toLocaleString()} hashes`)].join('');
 }
 const workerSrc = `
 import { blake2b } from '${CDN}/codec/pow/blake2b.js';
@@ -94,6 +99,8 @@ function onWorker(e) {
 }
 async function dispatch() {
   if (!job || !en1 || !target || !workers.length) return;
+  if (!inWindow()) { if (!sleeping) { sleeping = true; log(`sleeping: job bits ${job.bits}, waiting for ${$('minbits').value.trim()} (the min-difficulty window)`); } jobKey++; for (const w of workers) w.postMessage({ type: 'stop' }); $('status').textContent = 'sleeping'; $('status').className = 'chain'; return; }
+  if (sleeping) { sleeping = false; log('window open: mining', 'b'); $('status').textContent = 'mining'; $('status').className = 'chain good'; }
   const { workHeader, bytesToHex } = await import(CORE); const { blake2b } = await import(`${CDN}/codec/pow/blake2b.js`);
   en2 = bytesToHex(crypto.getRandomValues(new Uint8Array(en2size)));
   const header = bytesToHex(workHeader(blake2b, job, en1 + en2));
