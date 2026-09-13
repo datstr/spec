@@ -19,7 +19,10 @@ const gateway = (name, addr, port, api, keyFile) => base(name, {
 module.exports = { apps: [
   base('datstr-coordinator', { script: 'plugin/standalone.mjs', args: ['--conf', CONF, '--network', NETWORK, '--data', `${HOME}/knots-testnet4/datstr-coordinator`, '--port', '3400', '--min-difficulty', '0.001', '--window-multiple', '0', '--window-min-weight', '4'] }),
   gateway('datstr-gateway-a', ADDR[0], 3333, 3334, `${HOME}/.datstr/btc-testnet4-blake2b.key`),
-  gateway('datstr-gateway-b', ADDR[1], 3335, 3336, `${HOME}/.datstr/btc-testnet4-blake2b-b.key`),
+  // B mines for a cold master key: gateway/delegate.mjs made the descriptor and delegation off the gateway
+  { ...gateway('datstr-gateway-b', ADDR[1], 3335, 3336, `${HOME}/.datstr/btc-testnet4-blake2b-b.key`),
+    args: [...gateway('datstr-gateway-b', ADDR[1], 3335, 3336, `${HOME}/.datstr/btc-testnet4-blake2b-b.key`).args,
+      '--descriptor', `${HOME}/.datstr/master-b/descriptor.json`, '--delegation', `${HOME}/.datstr/master-b/delegation-<first 16 hex of worker>.json`] },
   base('datstr-miner-a', { script: MINER, args: ['127.0.0.1:3333', `${ADDR[0]}.datstr-a`], interpreter: 'none' }),
   base('datstr-miner-b', { script: MINER, args: ['127.0.0.1:3335', `${ADDR[1]}.datstr-b`], interpreter: 'none' }),
 ] };
