@@ -19,7 +19,7 @@ const co = await createCoordinator({
   params: { windowMultiple: num(args['window-multiple']), windowMinWeight: num(args['window-min-weight']), minDifficulty: num(args['min-difficulty']), feeBps: num(args['fee-bps']), feeScript: args['fee-script'], endpoints: { ws: `ws://127.0.0.1:${port}/ws`, http: `http://127.0.0.1:${port}/` } },
 }, log);
 for (const k of Object.keys(co.params)) if (co.params[k] === undefined) delete co.params[k];
-const route = routes(co);
+const route = await routes(co);
 const server = http.createServer(async (req, res) => {
   const [status, type, body] = await route(req.url.split('?')[0]);
   res.writeHead(status, { 'content-type': type, 'access-control-allow-origin': '*' }); res.end(body);

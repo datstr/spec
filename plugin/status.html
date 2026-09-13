@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>datstr Coordinator</title>
+<style>
+  :root { --bg:#0f1115; --card:#181b22; --line:#262b34; --fg:#e6e8ec; --muted:#9aa3b2; --accent:#6ea8fe; --good:#4ade80; --warn:#f0a04b; --bad:#f87171; }
+  * { box-sizing:border-box } html { scrollbar-color:var(--line) var(--bg) }
+  body { margin:0; padding:1.5rem; background:var(--bg); color:var(--fg); font:14px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace }
+  a { color:var(--accent) } h1 { font-size:1.25rem; margin:0 } h2 { font-size:1rem; color:var(--muted); margin:0 0 .6rem }
+  header { display:flex; justify-content:space-between; align-items:baseline; flex-wrap:wrap; gap:.5rem; border-bottom:1px solid var(--line); padding-bottom:.75rem; margin-bottom:1rem }
+  .motd { color:var(--muted) } .right { text-align:right } .nav a { margin-left:.75rem }
+  .chain { margin-left:.5rem; padding:.1rem .5rem; border-radius:.25rem; font-size:.8rem; font-weight:normal; vertical-align:middle; color:var(--warn); border:1px solid var(--warn) }
+  .chain.good { color:var(--good); border-color:var(--good) } .chain.bad { color:var(--bad); border-color:var(--bad) }
+  .stale { color:var(--warn) } .good { color:var(--good) } .bad { color:var(--bad) }
+  .banner { border:1px solid var(--warn); background:rgba(240,160,75,.08); border-radius:8px; padding:.6rem .8rem; margin-bottom:.75rem }
+  .hero { display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:.75rem; margin-bottom:.75rem }
+  .tile, .panel { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:.8rem .9rem } .panel { margin-bottom:.75rem }
+  .label { color:var(--muted); font-size:.8rem; text-transform:uppercase; letter-spacing:.04em }
+  .tile .big { font-size:1.5rem; line-height:1.25; margin-top:.2rem; font-variant-numeric:tabular-nums; word-break:break-word } .tile .sub { color:var(--muted); font-size:.8rem; margin-top:.15rem }
+  .meter { position:relative; height:.6rem; background:var(--bg); border:1px solid var(--line); border-radius:999px; overflow:hidden }
+  .meter > span { position:absolute; inset:0; width:0; background:var(--accent); opacity:.55; border-radius:999px; transition:width .4s }
+  .meter-row { display:flex; justify-content:space-between; align-items:baseline; gap:.5rem; flex-wrap:wrap; margin-bottom:.35rem } .meter-row .val { font-variant-numeric:tabular-nums }
+  .chips { display:flex; flex-wrap:wrap; gap:.4rem .5rem; margin-top:.7rem }
+  .chip { border:1px solid var(--line); border-radius:999px; padding:.15rem .6rem; font-size:.8rem; color:var(--muted) } .chip b { color:var(--fg); font-weight:600; font-variant-numeric:tabular-nums }
+  section { margin:1.5rem 0 } table { width:100%; border-collapse:collapse }
+  th, td { text-align:left; padding:.45rem .6rem; border-bottom:1px solid var(--line); vertical-align:top }
+  th { color:var(--muted); font-weight:600; font-size:.8rem; text-transform:uppercase } td.num, th.num { text-align:right; font-variant-numeric:tabular-nums } td.mono { word-break:break-all }
+  .tag { margin-left:.5rem; padding:.05rem .4rem; border-radius:.25rem; font-size:.75rem; color:var(--warn); border:1px solid var(--warn); white-space:nowrap }
+  .tag.good { color:var(--good); border-color:var(--good) }
+  .bar { position:relative } .bar > span { position:absolute; inset:0; background:rgba(110,168,254,.16); border-radius:3px } .bar > em { position:relative; font-style:normal }
+  footer { color:var(--muted); margin-top:1rem; font-size:.8rem }
+</style>
+</head>
+<body>
+<header>
+  <div><h1>datstr Coordinator<span class="chain" id="status"></span></h1><div class="motd" id="pool"></div></div>
+  <div class="motd right"><div id="updated">connecting...</div><div id="version"></div><div class="nav"><a href="pool.json">pool.json</a><a href="stats.json">stats.json</a><a href="shares.jsonl">shares</a><a href="https://datstr.com/spec/" target="_blank" rel="noopener">Spec</a></div></div>
+</header>
+<div class="banner" id="banner" style="display:none"></div>
+<div class="hero" id="hero"></div>
+
+<section>
+  <h2>Window</h2>
+  <div class="panel">
+    <div class="meter-row"><span class="label">Weight</span><span class="val" id="win-vals"></span></div>
+    <div class="meter"><span id="win-fill"></span></div>
+    <div class="chips" id="win-chips"></div>
+  </div>
+</section>
+
+<section>
+  <h2>Current split</h2>
+  <div style="overflow-x:auto"><table id="split"><thead><tr><th class="num">Value</th><th class="num">Share</th><th>Address</th></tr></thead><tbody></tbody></table></div>
+</section>
+
+<section>
+  <h2>Masters</h2>
+  <div style="overflow-x:auto"><table id="masters"><thead><tr><th>Master</th><th>Payout</th><th class="num">In window</th><th class="num">All time</th><th class="num">Last share</th><th>Gateway</th></tr></thead><tbody></tbody></table></div>
+</section>
+
+<section>
+  <h2>Blocks</h2>
+  <div style="overflow-x:auto"><table id="blocks"><thead><tr><th class="num">Height</th><th>Hash</th><th>Time</th><th>Master</th><th>Split</th><th>Relay</th><th>On chain</th></tr></thead><tbody></tbody></table></div>
+</section>
+
+<footer>Refreshes every 5 s. Every number here is recomputable from <a href="shares.jsonl">shares.jsonl</a>, <a href="masters.jsonl">masters.jsonl</a> and <a href="pool.json">pool.json</a> with <code>audit/replay.mjs</code>.
+  <div style="margin-top:.5rem">A <a href="https://datstr.com/" target="_blank" rel="noopener">datstr</a> coordinator, level 1, in the layout of <a href="https://github.com/iohzrd/ratum" target="_blank" rel="noopener">iohzrd/ratum</a>'s gateway page.</div>
+</footer>
+<script>
+const q = new URLSearchParams(location.search);
+const API = q.get('api') ? q.get('api').replace(/\/$/, '') + '/stats.json' : 'stats.json';
+const $ = (id) => document.getElementById(id);
+const num = (n, d) => n == null ? '-' : Number(n).toLocaleString(undefined, d != null ? { maximumFractionDigits: d } : {});
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const btc = (sats) => sats == null ? '-' : (sats / 1e8).toLocaleString(undefined, { minimumFractionDigits: 8, maximumFractionDigits: 8 }) + ' BTC';
+const pct = (part, whole) => whole > 0 ? (part / whole * 100).toFixed(1) + '%' : '-';
+function hashrate(hs) { if (hs == null) return '-'; const u = ['H/s', 'kH/s', 'MH/s', 'GH/s', 'TH/s', 'PH/s']; let i = 0; while (hs >= 1000 && i < u.length - 1) { hs /= 1000; i++; } return hs.toLocaleString(undefined, { maximumFractionDigits: hs < 10 ? 2 : 1 }) + ' ' + u[i]; }
+function duration(s) { if (s == null || !isFinite(s) || s <= 0) return '-'; if (s < 90) return Math.round(s) + ' s'; if (s < 5400) return Math.round(s / 60) + ' min'; if (s < 172800) return (s / 3600).toFixed(1) + ' h'; return (s / 86400).toFixed(1) + ' d'; }
+const ago = (s) => s == null || s < 0 ? '-' : duration(Math.max(s, 1)) + ' ago';
+const tile = (label, big, sub) => `<div class="tile"><div class="label">${label}</div><div class="big">${big}</div>${sub ? `<div class="sub">${sub}</div>` : ''}</div>`;
+const chip = (label, value) => `<span class="chip">${label} <b>${value}</b></span>`;
+const barCell = (text, part, whole) => `<td class="num bar"><span style="width:${whole > 0 ? Math.min(part / whole * 100, 100) : 0}%"></span><em>${text}</em></td>`;
+const EXPLORER = { 'btc:testnet4-blake2b': 'https://mempool.guide/testnet4', 'btc:mainnet-blake2b': 'https://mempool.guide' };
+function render(s) {
+  const ex = EXPLORER[s.chain]; const link = (kind, id, text) => ex ? `<a href="${ex}/${kind}/${id}" target="_blank" rel="noopener">${text}</a>` : text;
+  const full = s.window.weight >= s.window.need && s.window.need > 0;
+  $('status').textContent = s.tip ? (full ? 'Window full' : 'Filling window') : 'No tip'; $('status').className = 'chain ' + (s.tip ? (full ? 'good' : 'stale') : 'bad');
+  $('pool').innerHTML = `${esc(s.chain)} · node ${esc(s.node)} · pubkey <span title="${esc(s.pubkey)}">${esc(s.pubkey.slice(0, 16))}…</span> · fee ${(s.params.feeBps / 100).toFixed(2)}% · min difficulty ${num(s.params.minDifficulty)} · min payout ${num(s.params.minPayout)} sats`;
+  $('version').textContent = s.version || '';
+  const notes = []; if (!s.tip) notes.push('No template from the node yet.'); if (s.gateways.length === 0) notes.push('No gateway connected.');
+  $('banner').style.display = notes.length ? '' : 'none'; $('banner').innerHTML = notes.map(esc).join('<br>');
+  $('hero').innerHTML = [
+    tile('Hashrate', s.hashrate > 0 ? '~' + hashrate(s.hashrate) : '-', `${num(s.shares_last_10min)} shares in 10 min`),
+    tile('Shares credited', num(s.shares_total), `${num(s.stats.rejected)} refused${Object.keys(s.stats.byCode || {}).length ? ' (' + Object.entries(s.stats.byCode).map(([k, v]) => k + ' ' + v).join(', ') + ')' : ''}`),
+    tile('Next height', s.tip ? num(s.tip.height) : '-', s.tip ? `${btc(s.tip.value)} · bits ${esc(s.tip.bits)}` : 'no template'),
+    tile('Blocks', num(s.stats.blocks), s.blocks.length ? `last ${ago(Math.floor(Date.now() / 1000) - s.blocks[0].at)}` : 'none yet'),
+    tile('Masters', num(s.masters.length), `${num(s.gateways.length)} gateway${s.gateways.length === 1 ? '' : 's'} connected`),
+    tile('Uptime', duration(s.uptime_seconds), `polling the node every ${num(s.params.poll)} s`),
+  ].join('');
+  $('win-fill').style.width = (s.window.need > 0 ? Math.min(s.window.weight / s.window.need, 1) * 100 : 0) + '%';
+  $('win-vals').textContent = `${num(s.window.weight, 4)} / ${num(s.window.need, 4)} (${pct(s.window.weight, s.window.need)}) · ${num(s.window.shares)} shares`;
+  $('win-chips').innerHTML = [chip('window multiple', num(s.params.windowMultiple)), chip('min weight', num(s.params.windowMinWeight)), chip('shares', s.window.from_seq ? `#${s.window.from_seq} to #${s.window.to_seq}` : '-'), chip('split', s.split ? esc(s.split.id.slice(0, 12)) + '…' : '-'), chip('issued', s.split ? ago(s.split.issued_seconds_ago) : '-')].join('');
+  const outs = s.split ? s.split.outputs : [], total = outs.reduce((a, o) => a + o.value_sats, 0);
+  document.querySelector('#split tbody').innerHTML = outs.length ? outs.map((o) => `<tr><td class="num">${btc(o.value_sats)}</td>${barCell(pct(o.value_sats, total), o.value_sats, total)}<td class="mono">${esc(o.address)}</td></tr>`).join('') : `<tr><td colspan="3" class="motd">${s.split ? 'the window is empty: the next block pays its finder alone' : 'no split yet'}</td></tr>`;
+  const maxW = Math.max(...s.masters.map((m) => m.weight_window), 0);
+  document.querySelector('#masters tbody').innerHTML = s.masters.length ? s.masters.map((m) => `<tr><td class="mono" title="${esc(m.pubkey)}">${esc(m.pubkey.slice(0, 16))}…</td><td class="mono">${esc(m.address)}</td>${barCell(num(m.weight_window, 4) + ' (' + pct(m.weight_window, s.window.weight) + ')', m.weight_window, maxW)}<td class="num">${num(m.weight_total, 4)}</td><td class="num">${ago(m.last_share_seconds)}</td><td>${m.connected ? '<span class="tag good">connected</span>' : '<span class="tag">away</span>'}</td></tr>`).join('') : '<tr><td colspan="6" class="motd">no masters yet</td></tr>';
+  document.querySelector('#blocks tbody').innerHTML = s.blocks.length ? s.blocks.map((b) => `<tr><td class="num">${num(b.height)}</td><td class="mono">${link('block', b.hash, esc(b.hash))}</td><td>${new Date(b.at * 1000).toLocaleString()}</td><td class="mono" title="${esc(b.master)}">${esc(b.master.slice(0, 12))}…</td><td class="mono">${b.split === 'solo' ? 'solo' : esc(b.split.slice(0, 12)) + '…'}</td><td>${esc(b.relay)}</td><td>${b.onChain ? '<span class="good">yes</span>' : '<span class="bad">no</span>'}</td></tr>`).join('') : '<tr><td colspan="7" class="motd">none yet</td></tr>';
+  $('updated').textContent = 'updated ' + new Date().toLocaleTimeString();
+}
+async function tick() { let s; try { s = await (await fetch(API, { cache: 'no-store' })).json(); } catch { $('updated').innerHTML = '<span class="stale">unreachable</span>'; return; } render(s); }
+tick(); setInterval(tick, 5000);
+</script>
+</body>
+</html>

@@ -8,10 +8,11 @@ import { signEvent, verifyEvent, content as contentOf, pubkeyOf } from '../gatew
 import { rootFromBranches } from '../gateway/lib/merkle.mjs';
 import { computeSplit, windowOf, scaleSplit, difficultyOf } from '../gateway/lib/split.mjs';
 import { meets } from '../gateway/lib/target.mjs';
+import { scriptToAddress } from '../gateway/lib/address.mjs';
 
 export const KIND = { share: 23400, ack: 23401, assignment: 23402, split: 23403, pool: 33400, miner: 33401, delegation: 33402, snapshot: 33404, block: 33405 };
 const RULES = ['segwit', 'blake2b'];
-const DEFAULTS = { feeBps: 0, feeScript: null, windowMultiple: 2, windowMinWeight: 0, minDifficulty: 1, minPayout: 546, maxOutputs: 512, staleDepth: 3, splitGrace: 30, poll: 1 };
+const DEFAULTS = { feeBps: 0, feeScript: null, windowMultiple: 2, windowMinWeight: 0, minDifficulty: 1, minPayout: 546, maxOutputs: 512, staleDepth: 3, splitGrace: 30, poll: 1, splitDelayMs: 500 };
 
 export class Coordinator {
   constructor({ k, pow, hash, rpc, key, params, dataDir, log = console.log }) {
@@ -48,7 +49,10 @@ export class Coordinator {
     if (this.tip && this.tip.height === t.height && this.tip.prev === t.previousblockhash) return;
     this.tip = { height: t.height, prev: t.previousblockhash, target: t.target, value: t.coinbasevalue, difficulty: difficultyOf(t.target), bits: t.bits, at: Date.now() };
     this.prevAt.set(t.height, t.previousblockhash);
-    await this.issueSplit(t.height);
+    // a moment's delay so the share that found the block is credited before the split for the next height
+    clearTimeout(this.splitTimer);
+    await new Promise((r) => { this.splitTimer = setTimeout(r, this.params.splitDelayMs); });
+    if (this.tip.height === t.height) await this.issueSplit(t.height);
   }
 
   need() { return Math.max(this.params.windowMultiple * (this.tip?.difficulty ?? 0), this.params.windowMinWeight); }
@@ -185,12 +189,21 @@ export class Coordinator {
   }
 
   snapshot() {
+    const now = Date.now();
     const win = this.tip ? windowOf(this.shares, this.need()) : { shares: [], weight: 0 };
     const perMaster = {}; for (const s of win.shares) perMaster[s.master] = (perMaster[s.master] ?? 0) + s.weight;
+    const addr = (spk) => scriptToAddress(spk, this.k.params.bech32Hrp) ?? spk;
+    const cut = now / 1000 - 600, recent = this.shares.filter((s) => s.at >= cut);
+    const since = Math.max(cut, this.started / 1000), rate = recent.reduce((a, s) => a + s.weight * 4294967296, 0) / Math.max(1, now / 1000 - since);
+    const lastByMaster = {}; for (const s of this.shares) lastByMaster[s.master] = s.at;
+    const totalByMaster = {}; for (const s of this.shares) totalByMaster[s.master] = (totalByMaster[s.master] ?? 0) + s.weight;
+    const split = this.tip ? this.splits.get(this.tip.height) : null;
     return {
-      pubkey: this.pubkey, chain: this.chain, params: this.params, uptime_seconds: Math.floor((Date.now() - this.started) / 1000), tip: this.tip,
-      stats: this.stats, shares_total: this.shares.length, masters: [...this.masters.values()].map((m) => ({ pubkey: m.pubkey, payout: m.payout })),
-      window: { shares: win.shares.length, weight: win.weight, need: this.need(), perMaster }, split: this.tip ? this.splits.get(this.tip.height)?.event ?? null : null,
+      version: 'datstr-coordinator/0.0.1', pubkey: this.pubkey, chain: this.chain, node: this.rpc.url, params: this.params, uptime_seconds: Math.floor((now - this.started) / 1000), tip: this.tip,
+      stats: this.stats, shares_total: this.shares.length, hashrate: rate, shares_last_10min: recent.length,
+      masters: [...this.masters.values()].map((m) => ({ pubkey: m.pubkey, payout: m.payout, address: addr(m.payout), weight_window: perMaster[m.pubkey] ?? 0, weight_total: totalByMaster[m.pubkey] ?? 0, last_share_seconds: lastByMaster[m.pubkey] ? Math.floor(now / 1000 - lastByMaster[m.pubkey]) : null, connected: [...this.clients].some((c) => c.master === m.pubkey) })),
+      window: { shares: win.shares.length, weight: win.weight, need: this.need(), perMaster, from_seq: win.shares[0]?.seq ?? null, to_seq: win.shares.at(-1)?.seq ?? null },
+      split: split ? { id: split.event.id, height: split.height, issued_seconds_ago: Math.floor((now - split.issued) / 1000), outputs: split.outputs.map(([spk, v]) => ({ script: spk, value_sats: v, address: addr(spk) })), value: this.tip.value } : null,
       gateways: [...this.clients].map((c) => ({ remote: c.remote ?? null, master: c.master ?? null, agent: c.agent ?? null })), owed: this.owed, blocks: this.blocks.slice(0, 50),
     };
   }
@@ -217,11 +230,13 @@ export async function createCoordinator(config, log) {
 }
 
 // HTTP routes every host serves, as (path, handler) pairs returning [status, type, body].
-export function routes(co) {
+export async function routes(co) {
   const json = (o) => [200, 'application/json', JSON.stringify(o)];
   const file = async (p) => existsSync(p) ? [200, 'application/json', await readFile(p, 'utf8')] : [404, 'text/plain', 'not found'];
   const safe = (s) => /^[0-9a-zA-Z_-]+$/.test(s);
+  const html = existsSync(new URL('./status.html', import.meta.url)) ? await readFile(new URL('./status.html', import.meta.url), 'utf8') : '<p>no status page</p>';
   return async (path) => {
+    if (path === '/' || path === '') return [200, 'text/html; charset=utf-8', html];
     if (path === '/stats.json') return json(co.snapshot());
     if (path === '/pool.json') return json(co.descriptor);
     let m;

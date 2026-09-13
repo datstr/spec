@@ -10,7 +10,8 @@ export async function activate(api) {
   const log = (...a) => api.log.info(a.join(' '));
   const info = api.serverInfo?.() ?? {};
   const co = await createCoordinator({ ...cfg, dataDir, params: { ...(cfg.params ?? {}), endpoints: { ws: `${(info.baseUrl ?? '').replace(/^http/, 'ws')}${api.prefix}/ws`, http: `${info.baseUrl ?? ''}${api.prefix}/` } } }, log);
-  const route = routes(co);
+  const route = await routes(co);
+  api.fastify.get(api.prefix, async (req, reply) => { const [status, type, body] = await route('/'); reply.code(status).type(type).send(body); });
   api.fastify.get(`${api.prefix}/*`, async (req, reply) => {
     const [status, type, body] = await route(req.url.split('?')[0].slice(api.prefix.length));
     reply.code(status).type(type).header('access-control-allow-origin', '*').send(body);
