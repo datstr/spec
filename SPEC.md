@@ -382,10 +382,10 @@ detection and reputation are out of scope.
 
 ## 11. Documents
 
-Everything a coordinator knows is a document anyone can fetch. Today they are plain JSON
-served by the coordinator, each signed Nostr event carried whole; the JSON-LD context and
-the pod layout come in a later revision, and the JSON below is what the context will
-describe. Kinds 33404 and 33405 are reserved for the snapshot and block record as events.
+Everything a coordinator knows is a document anyone can fetch. The balances are Web
+Ledgers in JSON-LD (below); the rest is plain JSON served by the coordinator, each signed
+Nostr event carried whole, with `https://datstr.com/spec/context.jsonld` naming the datstr
+terms. The pod layout comes in a later revision. Kinds 33404 and 33405 are reserved for the snapshot and block record as events.
 
 | path | document | holds |
 |---|---|---|
@@ -396,6 +396,25 @@ describe. Kinds 33404 and 33405 are reserved for the snapshot and block record a
 | `/snapshots/<height>.json` | ledger snapshot | the split's id and outputs, `sharesUpTo` (the `seq` the window was computed from), the window's shares and weight and `need`, weight per master, the template value, owed before and after |
 | `/blocks/<hash>.json` | block record | height, hash, share id, master, coinbase txid, split id, the node's relay answer, whether it is on the chain |
 | `/stats.json` | live state | for the coordinator's page |
+
+**The balances are Web Ledgers.** Everything a coordinator holds about who is owed what is a
+map from an agent to a number, and [Web Ledgers](https://webledgers.org/) is the JSON-LD form
+of exactly that: `@context` `https://w3id.org/webledgers`, `type` `WebLedger`, `entries` of
+`{ type: "Entry", url: <agent URI>, amount }`. A coordinator serves four, under `/ledgers/`,
+with `https://datstr.com/spec/context.jsonld` as the second context for the datstr terms:
+
+| ledger | agent | amount | when written |
+|---|---|---|---|
+| `window.json` | `did:nostr:<master>` | weight in the window, currency `share` | every split |
+| `split.json` | `did:nostr:<master>`, or `bitcoin:<address>` when a script is not one master's | sats the next block's coinbase pays | every split; also kept as `split-<height>.json` |
+| `owed.json` | `did:nostr:<master>` | sats owed, paid first from the next block | every split |
+| `paid.json` | `bitcoin:<address>` | sats paid on chain by coinbases that followed this coordinator's splits | every block |
+
+Each carries `chain`, `coordinator` (`did:nostr:<coordinator pubkey>`), the `height` it is
+for, and for the split its event id. A Web Ledger states balances; the proof of them stays
+in the shares, the replay, the coinbase and, with 11.2, the trail. A miner's did:nostr
+therefore has a balance a generic Web Ledger client can read, at every coordinator that
+credits it, without knowing what mining is.
 
 A snapshot is written whenever a split is issued, which is at every new tip. Its
 `sharesUpTo` makes it reproducible: the first that many lines of `/shares.jsonl`, the
@@ -575,3 +594,5 @@ Provisional. All in ranges NIP-01 reserves for ephemeral (2xxxx) and addressable
 - [NIP-333](https://nip-333.github.io/): headers over Nostr.
 - [Blocktrails](https://blocktrails.org/): Nostr-native state anchoring on Bitcoin, the
   optional track record of 11.2.
+- [Web Ledgers](https://webledgers.org/): agent URIs to balances in JSON-LD, the form of
+  the coordinator's ledgers in section 11.

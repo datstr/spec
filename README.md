@@ -10,6 +10,7 @@ signed JSON wire, Solid documents, Nostr identity. Mining in the browser: a coor
 page with a socket, and a miner can be a tab.
 
 - [SPEC.md](SPEC.md): the protocol, draft version 0.0.1.
+- [context.jsonld](context.jsonld): the datstr JSON-LD terms, used beside Web Ledgers.
 
 Layout:
 

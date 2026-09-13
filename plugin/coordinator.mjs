@@ -10,6 +10,14 @@ import { computeSplit, windowOf, scaleSplit, difficultyOf } from '../gateway/lib
 import { meets } from '../gateway/lib/target.mjs';
 import { scriptToAddress } from '../gateway/lib/address.mjs';
 
+// Web Ledgers (https://webledgers.org/): the coordinator's balances as JSON-LD, agent URIs to amounts.
+const WL = 'https://w3id.org/webledgers', DATSTR_CTX = 'https://datstr.com/spec/context.jsonld';
+const ledger = ({ id, name, description, currency, entries, extra = {} }) => {
+  const now = Math.floor(Date.now() / 1000);
+  return { '@context': [WL, DATSTR_CTX], type: 'WebLedger', id, name, description, defaultCurrency: currency, created: now, updated: now, ...extra,
+    entries: entries.filter((e) => Number(e.amount) !== 0).map(({ url, amount, ...rest }) => ({ type: 'Entry', url, amount: String(amount), ...rest })) };
+};
+const didOf = (pubkey) => `did:nostr:${pubkey}`;
 export const KIND = { share: 23400, ack: 23401, assignment: 23402, split: 23403, pool: 33400, miner: 33401, delegation: 33402, snapshot: 33404, block: 33405 };
 const RULES = ['segwit', 'blake2b'];
 const DEFAULTS = { feeBps: 0, feeScript: null, windowMultiple: 2, windowMinWeight: 0, minDifficulty: 1, minPayout: 546, maxOutputs: 512, staleDepth: 3, splitGrace: 30, poll: 1, splitDelayMs: 500,
@@ -25,6 +33,7 @@ export class Coordinator {
     this.shares = []; this.seen = new Set(); this.masters = new Map(); this.workers = new Map(); this.clients = new Set();
     this.splits = new Map(); this.blocks = []; this.owed = {}; this.tip = null; this.prevAt = new Map(); this.targetAt = new Map();
     this.stats = { shares: 0, rejected: 0, blocks: 0, byCode: {}, refusedConnections: 0, droppedConnections: 0 };
+    this.paid = new Map(); // address → sats paid on chain, from block records and their snapshots
     this.byAddress = new Map();
     this.started = Date.now();
   }
@@ -50,6 +59,8 @@ export class Coordinator {
       this.log(`block record backfilled: h${sh.height} ${sh.hash}`);
     }
     this.blocks.sort((a, b) => b.height - a.height);
+    for (const b of [...this.blocks].reverse()) if (b.onChain) await this.creditPaid(b);
+    await mkdir(`${this.dataDir}/ledgers`, { recursive: true }); await this.writeLedger('paid');
     this.descriptor = signEvent(this.key, { kind: KIND.pool, tags: [['d', this.chain]], content: { chain: this.chain, ...this.params, endpoints: this.params.endpoints ?? {} } });
     await writeFile(`${this.dataDir}/pool.json`, JSON.stringify(this.descriptor, null, 1));
     this.log(`coordinator ${this.pubkey.slice(0, 16)}… on ${this.chain}: ${this.shares.length} shares, ${this.masters.size} masters, ${this.blocks.length} blocks loaded from ${this.dataDir}`);
@@ -91,6 +102,7 @@ export class Coordinator {
       window: { fromSeq: win.shares[0]?.seq ?? null, toSeq: win.shares.at(-1)?.seq ?? null, weight: win.weight, shares: win.shares.map((s) => s.id) },
       perMaster, outputs, owedBefore: this.owed, owedAfter: r.owed, event: ev,
     }, null, 1));
+    await this.writeLedgers(height, win, r, outputs);
     this.log(`split h${height}: ${outputs.length} outputs from ${win.shares.length} shares (weight ${win.weight} of ${this.need()} needed), value ${this.tip.value}`);
     this.broadcast({ type: 'split', event: ev });
   }
@@ -248,7 +260,40 @@ export class Coordinator {
     await appendFile(`${this.dataDir}/blocks.jsonl`, JSON.stringify(rec) + '\n');
     await writeFile(`${this.dataDir}/blocks/${r.hash}.json`, JSON.stringify(rec, null, 1));
     this.log(`BLOCK h${r.height} ${r.hash} by ${r.master.slice(0, 12)}…: relay ${result}, on chain ${onChain}`);
+    if (onChain) { await this.creditPaid(rec); await this.writeLedger('paid'); }
   }
+
+  // --- Web Ledgers (SPEC 11): the window, the split, what is owed, what was paid ---
+  addressOf(spk) { return scriptToAddress(spk, this.k.params.bech32Hrp) ?? spk; }
+  agentOfScript(spk) { const m = [...this.masters.values()].filter((x) => x.payout === spk); return m.length === 1 ? didOf(m[0].pubkey) : `bitcoin:${this.addressOf(spk)}`; }
+  async creditPaid(b) {
+    if (b.paidCredited) return; b.paidCredited = true;
+    try { const snap = JSON.parse(await readFile(`${this.dataDir}/snapshots/${b.height}.json`, 'utf8')); if (snap.split !== b.split) return;
+      for (const [spk, sats] of snap.outputs) { const a = this.addressOf(spk); this.paid.set(a, (this.paid.get(a) ?? 0) + sats); } } catch {}
+  }
+  ledgers(height, win, r, outputs) {
+    const base = `${this.params.endpoints?.http ?? ''}ledgers/`;
+    const perMaster = {}; for (const s of win?.shares ?? []) perMaster[s.master] = (perMaster[s.master] ?? 0) + s.weight;
+    return {
+      window: ledger({ id: base + 'window.json', name: 'datstr window', description: `Proof-of-work weight per master in the window that pays height ${height} on ${this.chain}`, currency: 'share',
+        entries: Object.entries(perMaster).map(([m, w]) => ({ url: didOf(m), amount: w, address: this.masters.get(m) ? this.addressOf(this.masters.get(m).payout) : undefined })),
+        extra: { chain: this.chain, coordinator: didOf(this.pubkey), height, window: { from: win?.shares?.[0]?.seq ?? null, to: win?.shares?.at(-1)?.seq ?? null, weight: win?.weight ?? 0, need: this.need() } } }),
+      split: ledger({ id: base + 'split.json', name: 'datstr split', description: `Coinbase outputs the next block at height ${height} pays on ${this.chain}`, currency: 'satoshi',
+        entries: outputs.map(([spk, sats]) => ({ url: this.agentOfScript(spk), amount: sats, address: this.addressOf(spk), script: spk })),
+        extra: { chain: this.chain, coordinator: didOf(this.pubkey), height, split: this.splits.get(height)?.event.id ?? null } }),
+      owed: ledger({ id: base + 'owed.json', name: 'datstr owed', description: `Sats owed to masters a coinbase could not fit, paid first from the next block on ${this.chain}`, currency: 'satoshi',
+        entries: Object.entries(r?.owed ?? this.owed).map(([m, sats]) => ({ url: didOf(m), amount: sats })), extra: { chain: this.chain, coordinator: didOf(this.pubkey) } }),
+      paid: ledger({ id: base + 'paid.json', name: 'datstr paid', description: `Sats paid on chain by coinbases that followed this coordinator's splits on ${this.chain}`, currency: 'satoshi',
+        entries: [...this.paid].map(([a, sats]) => ({ url: `bitcoin:${a}`, amount: sats, address: a })), extra: { chain: this.chain, coordinator: didOf(this.pubkey), blocks: this.blocks.filter((b) => b.onChain).length } }),
+    };
+  }
+  async writeLedgers(height, win, r, outputs) {
+    await mkdir(`${this.dataDir}/ledgers`, { recursive: true });
+    const L = this.ledgers(height, win, r, outputs); this.currentLedgers = L;
+    for (const [name, l] of Object.entries(L)) await writeFile(`${this.dataDir}/ledgers/${name}.json`, JSON.stringify(l, null, 1));
+    await writeFile(`${this.dataDir}/ledgers/split-${height}.json`, JSON.stringify(L.split, null, 1));
+  }
+  async writeLedger(name) { const L = this.ledgers(this.tip?.height ?? 0, null, null, []); await writeFile(`${this.dataDir}/ledgers/${name}.json`, JSON.stringify(L[name], null, 1)); }
 
   snapshot() {
     const now = Date.now();
@@ -307,6 +352,8 @@ export async function routes(co) {
     if (path === '/pool.json') return json(co.descriptor);
     let m;
     if ((m = /^\/snapshots\/(\d+)\.json$/.exec(path))) return file(`${co.dataDir}/snapshots/${m[1]}.json`);
+    if (path === '/ledgers' || path === '/ledgers/') return json({ '@context': DATSTR_CTX, type: 'datstr:Ledgers', coordinator: didOf(co.pubkey), chain: co.chain, ledgers: ['window', 'split', 'owed', 'paid'].map((n) => `ledgers/${n}.json`) });
+    if ((m = /^\/ledgers\/([a-z]+(?:-\d+)?)\.json$/.exec(path))) return file(`${co.dataDir}/ledgers/${m[1]}.json`);
     if ((m = /^\/blocks\/([0-9a-f]{64})\.json$/.exec(path))) return file(`${co.dataDir}/blocks/${m[1]}.json`);
     if ((m = /^\/shares\/([0-9a-f]{64})\.json$/.exec(path))) return file(`${co.dataDir}/shares/${m[1]}.json`);
     if (path === '/shares.jsonl') return existsSync(`${co.dataDir}/shares.jsonl`) ? [200, 'application/x-ndjson', await readFile(`${co.dataDir}/shares.jsonl`, 'utf8')] : [200, 'application/x-ndjson', ''];

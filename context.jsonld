@@ -1,0 +1,26 @@
+{
+  "@context": {
+    "@version": 1.1,
+    "datstr": "https://datstr.com/spec/#",
+    "wl": "https://w3id.org/webledgers#",
+    "chain": "datstr:chain",
+    "coordinator": { "@id": "datstr:coordinator", "@type": "@id" },
+    "height": { "@id": "datstr:height", "@type": "http://www.w3.org/2001/XMLSchema#integer" },
+    "split": "datstr:split",
+    "window": "datstr:window",
+    "from": "datstr:from",
+    "to": "datstr:to",
+    "need": "datstr:need",
+    "weight": "datstr:weight",
+    "address": "datstr:address",
+    "script": "datstr:script",
+    "block": "datstr:block",
+    "coinbase": "datstr:coinbase",
+    "commitment": "datstr:commitment",
+    "share": "datstr:share",
+    "master": { "@id": "datstr:master", "@type": "@id" },
+    "worker": { "@id": "datstr:worker", "@type": "@id" },
+    "LedgerSnapshot": "datstr:LedgerSnapshot",
+    "BlockRecord": "datstr:BlockRecord"
+  }
+}

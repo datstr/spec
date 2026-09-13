@@ -88,6 +88,7 @@ All in the pool descriptor (`/pool.json`), signed by the coordinator's key.
 | `/shares.jsonl`, `/shares/<id>.json` | credited shares in order; each share event |
 | `/snapshots/<height>.json` | the ledger snapshot behind each split |
 | `/blocks/<hash>.json` | block records |
+| `/ledgers/`, `/ledgers/{window,split,owed,paid}.json`, `/ledgers/split-<height>.json` | the balances as [Web Ledgers](https://webledgers.org/) (SPEC 11) |
 | `/ws` | the gateway WebSocket (SPEC 11.1) |
 
 ## State and restarts
