@@ -19,6 +19,8 @@ gateway/    the datstr gateway: getblocktemplate → datstr coinbase → stratum
   build-block.mjs  build one block and ask the node in proposal mode whether it is valid
   stratum.mjs      the stratum server BLAKE2b hardware and ratum's sia-test-miner speak to
   status.html      the gateway's status page, in ratum's layout, on --api
+  miner.html       the browser miner: a tab as a stratum client over /stratum on the same port
+  miner-core.mjs   the miner's arithmetic, shared with test/ws-miner.mjs (a Node stand-in)
   lib/             rpc, engine, block building, targets, nostr signing, merkle, the split
   test/regtest.sh  a block mined through the gateway on a throwaway regtest
 plugin/     the coordinator (SPEC 8 to 11): verifies shares, keeps the window, dictates the split
@@ -43,6 +45,7 @@ node gateway/serve.mjs --conf ~/knots-testnet4/bitcoin.conf --pay <addr> --pool 
 node audit/replay.mjs --url http://127.0.0.1:3400 --height <h>
 plugin/test/regtest.sh              # the acceptance test from SPEC section 13
 gateway/test/regtest.sh             # the gateway alone
+gateway/test/browser-miner.sh       # the browser miner's protocol over the gateway's WebSocket
 ```
 
 First target: `btc:testnet4-blake2b` with two gateways and one coordinator, per

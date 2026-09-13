@@ -46,6 +46,8 @@ import { coinbaseBranches } from './lib/merkle.mjs';
 import { scaleSplit } from './lib/split.mjs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
+import { SCHEMA } from './lib/engine.mjs';
+const { attachWsServer } = await import(`${SCHEMA}/codec/ws.js`);
 import { execSync } from 'node:child_process';
 
 const args = Object.fromEntries(process.argv.slice(2).map((a, i, all) => a.startsWith('--') ? [a.slice(2), all[i + 1] === undefined || all[i + 1].startsWith('--') ? true : all[i + 1]] : []).filter(Boolean));
@@ -240,15 +242,30 @@ function snapshot() {
 setInterval(() => { history.push([Math.floor(Date.now() / 1000), rateOf(recent, Date.now())]); if (history.length > 1440) history.shift(); }, 60000);
 setInterval(async () => { try { const m = await rpc('getmininginfo'); nodeWarnings = Array.isArray(m.warnings) ? m.warnings : m.warnings ? [m.warnings] : []; } catch (e) { nodeWarnings = [`node unreachable: ${e.message}`]; } }, 60000);
 if (args.api !== 'false') {
-  const page = await readFile(new URL('./status.html', import.meta.url), 'utf8');
   const apiPort = Number(args.api ?? 3334);
-  http.createServer((req, res) => {
+  const file = async (rel) => readFile(new URL(rel, import.meta.url), 'utf8');
+  const server = http.createServer(async (req, res) => {
     const path = req.url.split('?')[0];
     const cors = { 'access-control-allow-origin': '*' };
     if (path === '/stats.json') { res.writeHead(200, { 'content-type': 'application/json', ...cors }); return res.end(JSON.stringify(snapshot())); }
-    if (path === '/') { res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }); return res.end(page); }
+    if (path === '/') { res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }); return res.end(await file('./status.html')); }
+    if (path === '/miner') { res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }); return res.end(await file('./miner.html')); }
+    if (path === '/miner-core.mjs') { res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', ...cors }); return res.end(await file('./miner-core.mjs')); }
     res.writeHead(404, cors); res.end('not found');
-  }).listen(apiPort, '127.0.0.1', () => log(`status page at http://127.0.0.1:${apiPort}/`));
+  });
+  // stratum over WebSocket at /stratum, for the browser miner: the same server, each socket wrapped to look like a TCP one
+  attachWsServer(server, (client, req) => {
+    if (req.url.split('?')[0] !== '/stratum') return client.close();
+    const listeners = {};
+    const sock = { remoteAddress: req.socket.remoteAddress, remotePort: req.socket.remotePort, destroyed: false, setNoDelay() {},
+      on(ev, cb) { (listeners[ev] ??= []).push(cb); return sock; },
+      write(s) { if (!sock.destroyed) client.send(new TextEncoder().encode(s)); },
+      destroy() { if (!sock.destroyed) { sock.destroyed = true; try { client.close(); } catch {} } } };
+    client.onMessage((payload) => { for (const cb of listeners.data ?? []) cb(new TextDecoder().decode(payload)); });
+    client.onClose(() => { sock.destroyed = true; for (const cb of listeners.close ?? []) cb(); });
+    stratum.accept(sock);
+  });
+  server.listen(apiPort, args['api-host'] ?? '127.0.0.1', () => log(`status page at http://127.0.0.1:${apiPort}/, browser miner at /miner, stratum over WebSocket at /stratum`));
 }
 
 const port = await stratum.listen(Number(args.port ?? 3333));
