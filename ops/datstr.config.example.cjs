@@ -1,6 +1,6 @@
 // pm2 definitions for a datstr coordinator, two gateways and two CPU miners on one box.
 // Copy next to your node's files, edit the paths and addresses, then:
-//   pm2 start datstr.ecosystem.cjs && pm2 save
+//   pm2 start datstr.config.cjs && pm2 save
 // The miners exit when their gateway's socket drops, so pm2 restarts them with a delay.
 const { readFileSync } = require('node:fs');
 const HOME = process.env.HOME;
