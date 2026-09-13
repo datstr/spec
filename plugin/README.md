@@ -37,7 +37,7 @@ With the flag, config comes from the environment:
 
 ```sh
 DATSTR_CONF=~/knots-testnet4/bitcoin.conf DATSTR_NETWORK=btc:testnet4-blake2b \
-DATSTR_DATA=~/datstr-coordinator DATSTR_PARAMS='{"windowMultiple":0,"windowMinWeight":4,"minDifficulty":0.001}' \
+DATSTR_DATA=~/datstr-coordinator DATSTR_PARAMS='{"windowMultiple":0,"windowMinWeight":200,"minDifficulty":0.001}' \
 jss start --plugin /path/to/datstr/spec/plugin/index.mjs@/datstr
 ```
 
