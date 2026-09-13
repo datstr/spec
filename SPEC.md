@@ -13,10 +13,11 @@ The name is DATUM plus Nostr. The semantics are DATUM's. The wire is signed JSON
 ## 1. Principles
 
 1. Pools pool rewards, not blocks. The miner's node selects transactions.
-2. Bitcoin consensus is the only hard validity boundary. Every check a datstr
-   verifier makes is a [bitcoin-kernel](https://bitcoin-kernel.com/) rule.
+2. A block is valid when the miner's own node accepts it, policy included. A datstr
+   verifier checks what it can see, the header, the coinbase and the proof of work,
+   and every check it makes is a [bitcoin-kernel](https://bitcoin-kernel.com/) rule.
 3. Nostr and did:nostr provide identity, discovery, delegation and commitments.
-   Relays are never consensus. Anything a relay could drop, reorder or duplicate
+   Relays are never the source of truth. Anything a relay could drop, reorder or duplicate
    must be reconstructible from signed shares alone.
 4. A share is proof of work bound to a worker key. Its signed event is a receipt.
 5. Accounting is a deterministic function of a share set. Two verifiers holding the
@@ -26,8 +27,12 @@ The name is DATUM plus Nostr. The semantics are DATUM's. The wire is signed JSON
 7. Existing hardware works unchanged. Stratum v1 stays on the gateway's south side.
 8. Infrastructure is disposable. If every coordinator disappears, a gateway falls
    back to solo work against its own node and keeps its receipts.
-9. Inclusion policy is local. Fork-choice policy is out of scope, and a datstr
-   verifier never refuses a share for building on a valid parent.
+9. Standardness is the default, not a filter the network imposes. A gateway builds
+   from its own node's mempool, so the node's policy shapes every template: Knots'
+   on the BLAKE2b chains, which is stricter than Core's and aimed at a monetary
+   Bitcoin. A cohort may hold its members to a declared policy on the blocks they
+   find. Fork-choice policy is out of scope, and a verifier never refuses a share for
+   what its parent contained.
 10. If the coordinator cannot run on an old Android phone, the protocol is
     over-engineered.
 
@@ -35,7 +40,7 @@ The name is DATUM plus Nostr. The semantics are DATUM's. The wire is signed JSON
 
 | layer | provides | this spec |
 |---|---|---|
-| Bitcoin (btc, xbt, and their testnet4s) | consensus, settlement | referenced |
+| Bitcoin (btc, xbt, and their testnet4s) | validity, settlement | referenced |
 | share network | proof-of-work accounting | sections 6 to 10 |
 | Nostr / did:nostr | identity, delegation, discovery, documents | sections 4, 11 |
 | market | variance transfer, claim trading | reserved, section 14 |
@@ -99,6 +104,14 @@ The gateway polls its own node's `getblocktemplate` and builds one job per templ
 No message in this protocol carries a template, a transaction list or a merkle
 branch from north to south. The coordinator learns what the gateway mined only from
 the share.
+
+The template is the node's, and the node's policy is the miner's policy. A
+transaction the node would not relay does not reach the template, so a datstr
+network of Knots nodes mines to Knots standardness without any rule in this spec
+saying so. During RDTS on the BLAKE2b chains part of that policy is a block rule,
+the 800,000 weight limit and the 34-byte output script limit, and the kernel
+applies it as one. A miner who wants something else changes their node, and
+section 14 is where a cohort says what it expects of its members.
 
 ### 6.1 Coinbase
 
@@ -341,8 +354,11 @@ Then the same on `btc:testnet4`, then mainnet.
 Named so that the format leaves room, and otherwise not part of this spec:
 
 - **policy manifest**, kind 33410: what a miner will include in its own templates.
-  Informational. A verifier never reads it.
-- **cohort**, kind 33411: a voluntary payout group sharing a pool descriptor.
+  Informational in this draft.
+- **cohort**, kind 33411: a voluntary payout group sharing a pool descriptor and a
+  declared policy, held to it on the blocks its members find. The check and the
+  penalty are not yet specified; the verifier cannot see undisclosed templates, so
+  whatever they become they apply to found blocks, never to shares.
 - **claim**, kind 33412: a master's signed statement of its shares in a window,
   the thing a market could price. Nothing in this spec transfers one.
 - **market bid and ask**: not specified.
@@ -374,9 +390,9 @@ Named so that the format leaves room, and otherwise not part of this spec:
   provably so, and at level 2 replaceable.
 - **Relay censorship**: relays carry documents, never the ledger's source of truth.
 - **Double-selling claims**: out of scope with the market.
-- **Bad templates**: a gateway's node validates them. A coordinator refuses a share
-  whose coinbase does not decode, and cannot see the rest of the block, which is
-  the point.
+- **Bad templates**: a gateway's node validates them and applies its policy. A
+  coordinator refuses a share whose coinbase does not decode, and cannot see the
+  rest of the block, which is the point.
 
 ## Appendix A. Event kinds
 
