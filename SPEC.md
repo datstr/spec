@@ -20,7 +20,7 @@ in a browser.
 2. A block is valid when the miner's own node accepts it, policy included. A datstr
    verifier checks what it can see, the header, the coinbase and the proof of work,
    and every check it makes is a [bitcoin-kernel](https://bitcoin-kernel.com/) rule.
-3. Nostr and did:nostr provide identity, discovery, delegation and commitments.
+3. Nostr and [did:nostr](https://did-nostr.com/) provide identity, discovery, delegation and commitments.
    Relays are never the source of truth. Anything a relay could drop, reorder or duplicate
    must be reconstructible from signed shares alone.
 4. A share is proof of work bound to a worker key. Its signed event is a receipt.
@@ -52,7 +52,7 @@ in a browser.
 |---|---|---|
 | Bitcoin (btc, xbt, and their testnet4s) | validity, settlement | referenced |
 | share network | proof-of-work accounting | sections 6 to 10 |
-| Nostr / did:nostr | identity, delegation, discovery, documents | sections 4, 11 |
+| Nostr / [did:nostr](https://did-nostr.com/) | identity, delegation, discovery, documents | sections 4, 11 |
 | market | variance transfer, claim trading | reserved, section 14 |
 
 ## 3. Roles
@@ -73,7 +73,7 @@ in a browser.
 
 ## 4. Identity
 
-Identity is a Nostr keypair, expressed as `did:nostr:<hex pubkey>`.
+Identity is a Nostr keypair, expressed as [`did:nostr:<hex pubkey>`](https://did-nostr.com/).
 
 - **master**: the identity a miner is paid under. Signs the miner descriptor and
   delegations. Never installed on a gateway.
