@@ -51,7 +51,8 @@ const CDN = 'https://cdn.jsdelivr.net/gh/bitcoin-desktop/schema@v0.0.25';
 const CORE = new URL('miner-core.mjs', location.href).href;
 const q = new URLSearchParams(location.search);
 $('url').value = q.get('url') ?? `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/stratum`;
-$('user').value = q.get('user') ?? localStorage.getItem('datstr.user') ?? 'tab';
+const storedName = localStorage.getItem('datstr.user') ?? '';
+$('user').value = q.get('user') ?? ((storedName && !storedName.includes('.') && storedName.length <= 32) ? storedName : 'tab');
 $('pay').value = q.get('pay') ?? localStorage.getItem('datstr.pay') ?? '';
 // identity (SPEC 4 and 7): with a Nostr login the tab is its own master; it signs a descriptor with its payout
 // address and a delegation to the worker key the gateway derives for it, via NIP-07 (xlogin provides window.nostr)
@@ -59,12 +60,15 @@ let me = null; // { master } when logged in with Nostr
 const idline = (t, cls) => { $('idline').textContent = t; $('idline').className = cls ?? 'motd'; };
 const showIdentity = () => { if (me) idline(`Nostr master ${me.master.slice(0, 12)}… · paid to ${$('pay').value.trim() || '(enter an address)'} · the gateway holds only a delegated worker key`, 'good'); else idline($('pay').value.trim() ? `mining as address ${$('pay').value.trim().slice(0, 14)}…, paid there` : `not logged in: mining as the gateway's address`); };
 document.addEventListener('xlogin', (e) => { if (e.detail.type === 'nostr') { me = { master: e.detail.id }; showIdentity(); log(`logged in: Nostr ${e.detail.id.slice(0, 16)}…`); if (ws && ws.readyState === 1) identify(); } });
+// xlogin restores a saved session before this module runs, so its event may already have fired: read the state too
+const adoptLogin = () => { if (!me && window.xlogin?.type === 'nostr' && window.xlogin.id) { me = { master: window.xlogin.id }; showIdentity(); log(`logged in: Nostr ${me.master.slice(0, 16)}… (restored session)`); if (ws && ws.readyState === 1) identify(); } };
+{ let tries = 0; const t = setInterval(() => { adoptLogin(); if (me || ++tries > 20) clearInterval(t); }, 250); }
 document.addEventListener('xlogout', () => { me = null; showIdentity(); log('logged out'); });
 $('loginlink').onclick = (e) => { e.preventDefault(); window.xlogin?.login(); };
 $('pay').onchange = showIdentity;
 async function identify() {
   const pay = $('pay').value.trim();
-  if (!me) return; if (!pay) return log('identity: enter a payout address for this chain, then reconnect', 'i');
+  if (!me) return; if (!pay) { idline(`Nostr master ${me.master.slice(0, 12)}… logged in, but no payout address: enter a tb1p address in "pay to" and press stop, then start`, 'stale'); return log('identity: enter a payout address for this chain in "pay to", then stop and start', 'i'); }
   send({ id: '3', method: 'mining.datstr_worker', params: [me.master, pay] });
 }
 async function signIdentity(worker, chain, payout) {
@@ -149,7 +153,8 @@ async function onLine(line) {
 }
 function start() {
   const url = $('url').value.trim(), diff = $('diff').value.trim(), n = Math.max(1, Number($('workers').value) || 1);
-  const name = $('user').value.trim() || 'tab', pay = $('pay').value.trim();
+  adoptLogin();
+  const name = ($('user').value.trim() || 'tab').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 32) || 'tab', pay = $('pay').value.trim();
   // the stratum username: an address makes the tab its own identity paid there (SPEC 7); with a Nostr login the address goes into the signed descriptor instead
   const user = (!me && pay) ? `${pay}.${name}` : `${(gatewayPay ?? '').replace(/\.tab$/, '') || 'gateway'}.${name}`;
   if (!me && !pay) log(`no payout address: mining as the gateway's address`); else if (!me) log(`mining as ${pay}: paid there directly`);
