@@ -5,7 +5,7 @@ their own block templates, prove their work with Nostr-signed shares, and are pa
 directly in the coinbase. No custody, no mandatory fee, and every rule a verifier
 applies runs in a browser via [bitcoin-kernel](https://bitcoin-kernel.com/).
 
-datstr: Decentralized Alternative Templates, Shares Transmitted by Relays. DATUM semantics,
+datstr: Decentralized Alternative Templates and Shares Transmitted by Relays. DATUM semantics,
 signed JSON wire, Solid documents, Nostr identity. Mining in the browser: a coordinator is a
 page with a socket, and a miner can be a tab.
 
