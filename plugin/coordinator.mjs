@@ -251,12 +251,11 @@ export async function routes(co) {
   const json = (o) => [200, 'application/json', JSON.stringify(o)];
   const file = async (p) => existsSync(p) ? [200, 'application/json', await readFile(p, 'utf8')] : [404, 'text/plain', 'not found'];
   const safe = (s) => /^[0-9a-zA-Z_-]+$/.test(s);
-  const html = existsSync(new URL('./status.html', import.meta.url)) ? await readFile(new URL('./status.html', import.meta.url), 'utf8') : '<p>no status page</p>';
-  const auditUrl = new URL('../audit/index.html', import.meta.url);
-  const audit = existsSync(auditUrl) ? await readFile(auditUrl, 'utf8') : '<p>no audit page</p>';
+  // pages are read per request: small files, and an edit shows without a restart
+  const page = async (rel) => { const u = new URL(rel, import.meta.url); return existsSync(u) ? await readFile(u, 'utf8') : `<p>no ${rel}</p>`; };
   return async (path) => {
-    if (path === '/' || path === '') return [200, 'text/html; charset=utf-8', html];
-    if (path === '/audit' || path === '/audit/') return [200, 'text/html; charset=utf-8', audit];
+    if (path === '/' || path === '') return [200, 'text/html; charset=utf-8', await page('./status.html')];
+    if (path === '/audit' || path === '/audit/') return [200, 'text/html; charset=utf-8', await page('../audit/index.html')];
     if (path === '/gateway/lib/split.mjs') return [200, 'text/javascript; charset=utf-8', await readFile(new URL('../gateway/lib/split.mjs', import.meta.url), 'utf8')];
     if (path === '/stats.json') return json(co.snapshot());
     if (path === '/pool.json') return json(co.descriptor);
