@@ -8,7 +8,11 @@ own nodes, prove their work with signed shares, and are paid directly in the coi
 of every block the network finds. There is no custody, no mandatory fee, and no
 verification logic that does not also run in a browser tab.
 
-The name is DATUM plus Nostr. The semantics are DATUM's. The wire is signed JSON.
+The name is DATUM plus Nostr. The semantics are DATUM's, on purpose: DATUM showed
+that a miner's own node can build the block while the pool only coordinates the
+reward, and datstr wants its gateways, its operators and its miners to feel at home.
+The wire north of the gateway is signed JSON, and a whole pool, mining included, runs
+in a browser.
 
 ## 1. Principles
 
@@ -35,6 +39,12 @@ The name is DATUM plus Nostr. The semantics are DATUM's. The wire is signed JSON
    what its parent contained.
 10. If the coordinator cannot run on an old Android phone, the protocol is
     over-engineered.
+11. Friendly to DATUM. The model is DATUM's, the terms are DATUM's where they fit,
+    a DATUM gateway is one adapter away from a datstr coordinator, and nothing here
+    competes with a DATUM pool for a miner's hashrate that would rather stay there.
+12. The browser is a full participant. It can audit the ledger, and it can mine: the
+    kernel's miner plus a WebSocket to a coordinator is a miner in a tab, and a
+    coordinator is a page with a socket.
 
 ## 2. Layers
 
@@ -57,6 +67,9 @@ The name is DATUM plus Nostr. The semantics are DATUM's. The wire is signed JSON
   none. See section 12.
 - **auditor**: anyone with a browser. Fetches the documents, replays the shares
   through the kernel, checks the coinbase of every block against the ledger.
+- **browser miner**: a page that builds jobs from a template source, hashes with the
+  kernel's miner, and sends shares over the same WebSocket a gateway uses. Slow, and
+  the fastest way to see the whole loop work.
 
 ## 4. Identity
 
@@ -416,7 +429,8 @@ Provisional. All in ranges NIP-01 reserves for ephemeral (2xxxx) and addressable
 
 - [DATUM](https://github.com/CONVOYMining/datum_gateway) and
   [ratum](https://github.com/iohzrd/ratum): miner-built templates, pool-dictated
-  coinbase, owed blocks. datstr keeps the model and drops the wire.
+  coinbase, owed blocks. datstr keeps the model, borrows the terms, and speaks
+  signed JSON north of the gateway. With thanks.
 - P2Pool and Braidpool: share chains and DAGs. Level 3.
 - Stratum v2 job declaration: the same goal on a different wire.
 - [bitcoin-kernel](https://bitcoin-kernel.com/): every rule a verifier applies.

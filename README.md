@@ -5,7 +5,8 @@ their own block templates, prove their work with Nostr-signed shares, and are pa
 directly in the coinbase. No custody, no mandatory fee, and every rule a verifier
 applies runs in a browser via [bitcoin-kernel](https://bitcoin-kernel.com/).
 
-DATUM semantics, signed JSON wire, Solid documents, Nostr identity.
+DATUM semantics, signed JSON wire, Solid documents, Nostr identity. Mining in the
+browser: a coordinator is a page with a socket, and a miner can be a tab.
 
 - [SPEC.md](SPEC.md): the protocol, draft version 0.0.1.
 
