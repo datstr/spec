@@ -304,7 +304,11 @@ if (args.api !== 'false') {
     const cors = { 'access-control-allow-origin': '*' };
     if (path === '/stats.json') { res.writeHead(200, { 'content-type': 'application/json', ...cors }); return res.end(JSON.stringify(snapshot())); }
     if (path === '/') { res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }); return res.end(await file('./status.html')); }
-    if (path === '/miner') { res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }); return res.end(await file('./miner.html')); }
+    if (path === '/miner') {
+      // the page's own URL for its Open Graph tags: the host and prefix it was reached through (haproxy passes X-Forwarded-Proto; a prefix comes through X-Forwarded-Prefix or is unknown)
+      const proto = req.headers['x-forwarded-proto'] ?? 'http', host = req.headers['x-forwarded-host'] ?? req.headers.host ?? '127.0.0.1', prefix = req.headers['x-forwarded-prefix'] ?? (args['public-prefix'] ?? '');
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }); return res.end((await file('./miner.html')).replace('{{URL}}', `${proto}://${host}${prefix}/miner`));
+    }
     if (path === '/miner-core.mjs') { res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', ...cors }); return res.end(await file('./miner-core.mjs')); }
     // the coordinator's documents, proxied so a page served from this gateway (a phone, a friend) can read them without reaching the coordinator's host
     if (path.startsWith('/pool/') && pool.url) {
