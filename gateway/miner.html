@@ -80,13 +80,35 @@ $('pay').value = q.get('pay') ?? localStorage.getItem('datstr.pay') ?? '';
 // address and a delegation to the worker key the gateway derives for it, via NIP-07 (xlogin provides window.nostr)
 let me = null; // { master } when logged in with Nostr
 const EXPLORER = { 'btc:testnet4-blake2b': 'https://mempool.guide/testnet4', 'btc:mainnet-blake2b': 'https://mempool.guide' };
-let chainId = null; fetch(new URL('stats.json', location.href), { cache: 'no-store' }).then((r) => r.json()).then((g) => { chainId = g.network; showIdentity(); }).catch(() => {});
+let chainId = null; fetch(new URL('stats.json', location.href), { cache: 'no-store' }).then((r) => r.json()).then((g) => { chainId = g.network; fillPayFromKey(); showIdentity(); }).catch(() => {});
+// a Taproot address from a Nostr pubkey: the x-only key as the witness program, untweaked, bech32m with the chain's prefix
+const B32 = 'qpzry9x8gf2tvdw0s3jn54khce6mua7l';
+function bech32m(hrp, version, program) {
+  const polymod = (v) => { const G = [0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233dd, 0x2a1462b3]; let c = 1; for (const x of v) { const t = c >>> 25; c = ((c & 0x1ffffff) << 5) ^ x; for (let i = 0; i < 5; i++) if ((t >>> i) & 1) c ^= G[i]; } return c >>> 0; };
+  const exp = []; for (const ch of hrp) exp.push(ch.charCodeAt(0) >>> 5); exp.push(0); for (const ch of hrp) exp.push(ch.charCodeAt(0) & 31);
+  const words = [version]; let acc = 0, bits = 0; for (const b of program) { acc = (acc << 8) | b; bits += 8; while (bits >= 5) { bits -= 5; words.push((acc >>> bits) & 31); } } if (bits) words.push((acc << (5 - bits)) & 31);
+  const pm = polymod([...exp, ...words, 0, 0, 0, 0, 0, 0]) ^ 0x2bc830a3; const chk = []; for (let i = 0; i < 6; i++) chk.push((pm >>> (5 * (5 - i))) & 31);
+  return hrp + '1' + [...words, ...chk].map((w) => B32[w]).join('');
+}
+const HRP = { 'btc:testnet4-blake2b': 'tb', 'btc:testnet4': 'tb', 'btc:mainnet-blake2b': 'bc', 'btc:mainnet': 'bc', 'btc:regtest-blake2b': 'bcrt' };
+const addressFromPubkey = (hex) => { const hrp = HRP[chainId]; if (!hrp || !/^[0-9a-f]{64}$/i.test(hex)) return null; const b = new Uint8Array(32); for (let i = 0; i < 32; i++) b[i] = parseInt(hex.substr(i * 2, 2), 16); return bech32m(hrp, 1, b); };
+// fill "pay to" from the login when it is empty: the coins then belong to the Nostr key itself
+let payDerived = false;
+function fillPayFromKey() {
+  if (!me || $('pay').value.trim() || !chainId) return;
+  const a = addressFromPubkey(me.master); if (!a) return;
+  $('pay').value = a; payDerived = true; localStorage.setItem('datstr.pay', a);
+  log(`payout address derived from your Nostr key: ${a} (spendable with that key as a Taproot key-path spend; paste another address to be paid elsewhere)`);
+  showIdentity();
+}
+$('pay').addEventListener('input', () => { payDerived = false; });
 const addrLink = (a) => { const ex = EXPLORER[chainId]; return ex ? `<a href="${ex}/address/${esc(a)}" target="_blank" rel="noopener">${esc(a)}</a>` : esc(a); };
 const idline = (t, cls) => { $('idline').innerHTML = t; $('idline').className = cls ?? 'motd'; };
-const showIdentity = () => { const pay = $('pay').value.trim(); if (me) idline(`Nostr master ${esc(me.master.slice(0, 12))}… · paid to ${pay ? addrLink(pay) : '(enter an address)'} · the gateway holds only a delegated worker key`, 'good'); else idline(pay ? `mining as address ${addrLink(pay)}, paid there` : `not logged in: mining as the gateway's address`); };
-document.addEventListener('xlogin', (e) => { if (e.detail.type === 'nostr') { me = { master: e.detail.id }; showIdentity(); log(`logged in: Nostr ${e.detail.id.slice(0, 16)}…`); if (ws && ws.readyState === 1) identify(); } });
+const showIdentity = () => { const pay = $('pay').value.trim(); if (me) idline(`Nostr master ${esc(me.master.slice(0, 12))}… · paid to ${pay ? addrLink(pay) : '(enter an address)'}${payDerived ? ' (your key\'s own Taproot address)' : ''} · the gateway holds only a delegated worker key`, 'good'); else idline(pay ? `mining as address ${addrLink(pay)}, paid there` : `not logged in: mining as the gateway's address`); };
+document.addEventListener('xlogin', (e) => { if (e.detail.type === 'nostr') { me = { master: e.detail.id }; log(`logged in: Nostr ${e.detail.id.slice(0, 16)}…`); fillPayFromKey(); showIdentity(); if (ws && ws.readyState === 1) identify(); } });
+document.addEventListener('xlogout', () => { if (payDerived) { $('pay').value = ''; localStorage.removeItem('datstr.pay'); payDerived = false; } });
 // xlogin restores a saved session before this module runs, so its event may already have fired: read the state too
-const adoptLogin = () => { if (!me && window.xlogin?.type === 'nostr' && window.xlogin.id) { me = { master: window.xlogin.id }; showIdentity(); log(`logged in: Nostr ${me.master.slice(0, 16)}… (restored session)`); if (ws && ws.readyState === 1) identify(); } };
+const adoptLogin = () => { if (!me && window.xlogin?.type === 'nostr' && window.xlogin.id) { me = { master: window.xlogin.id }; log(`logged in: Nostr ${me.master.slice(0, 16)}… (restored session)`); fillPayFromKey(); showIdentity(); if (ws && ws.readyState === 1) identify(); } };
 { let tries = 0; const t = setInterval(() => { adoptLogin(); if (me || ++tries > 20) clearInterval(t); }, 250); }
 document.addEventListener('xlogout', () => { me = null; showIdentity(); log('logged out'); });
 $('loginlink').onclick = (e) => { e.preventDefault(); window.xlogin?.login(); };
