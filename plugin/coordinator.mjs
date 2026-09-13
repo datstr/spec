@@ -61,7 +61,9 @@ export class Coordinator {
   // --- the tip, from the coordinator's own node; a new tip issues a split for the next height ---
   async poll() {
     const t = await this.rpc('getblocktemplate', { rules: RULES });
-    if (this.tip && this.tip.height === t.height && this.tip.prev === t.previousblockhash) return;
+    // the target for a height can change without a new tip (testnet4's minimum-difficulty window): track it every poll
+    this.targetAt.set(t.height, t.target);
+    if (this.tip && this.tip.height === t.height && this.tip.prev === t.previousblockhash) { this.tip.target = t.target; this.tip.bits = t.bits; this.tip.difficulty = difficultyOf(t.target); return; }
     this.tip = { height: t.height, prev: t.previousblockhash, target: t.target, value: t.coinbasevalue, difficulty: difficultyOf(t.target), bits: t.bits, at: Date.now() };
     this.prevAt.set(t.height, t.previousblockhash); this.targetAt.set(t.height, t.target);
     for (const h of [...this.targetAt.keys()]) if (h < t.height - 16) this.targetAt.delete(h);
@@ -211,7 +213,9 @@ export class Coordinator {
     if (this.seen.has(d.blockHash)) return fail('duplicate');
     // the network target for the share's own height: the tip may already have moved on by the time the share arrives
     const netTarget = this.targetAt.get(c.height) ?? (c.height === this.tip.height ? this.tip.target : null);
-    const isBlock = netTarget ? meets(this.hash.hexToBytes(d.blockHash), this.hash.hexToBytes(netTarget)) : false;
+    let isBlock = netTarget ? meets(this.hash.hexToBytes(d.blockHash), this.hash.hexToBytes(netTarget)) : false;
+    // a share that carries the block is one the gateway submitted: if the node has it, it is a block whatever we recorded for the target
+    if (!isBlock && c.block) { try { const h = await this.rpc('getblockheader', d.blockHash); if (h && h.confirmations >= 0) isBlock = true; } catch {} }
     return { ok: true, weight, master: masterKey, worker: ev.pubkey, hash: d.blockHash, isBlock, height: c.height, coinbaseTxid: cbTxid, splitId: c.split };
   }
 
