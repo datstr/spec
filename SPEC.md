@@ -10,7 +10,9 @@ own nodes, prove their work with signed shares, and are paid directly in the coi
 of every block the network finds. There is no custody, no mandatory fee, and no
 verification logic that does not also run in a browser tab.
 
-The name is DATUM plus Nostr. The semantics are DATUM's, on purpose: DATUM showed
+The name is DATUM plus Nostr, and reads as Decentralized Alternative Templates, Shares
+Transmitted by Relays: the template never leaves the miner, and a share is a signed event a
+relay can carry unchanged. The semantics are DATUM's, on purpose: DATUM showed
 that a miner's own node can build the block while the pool only coordinates the
 reward, and datstr wants its gateways, its operators and its miners to feel at home.
 The wire north of the gateway is signed JSON, and a whole pool, mining included, runs
