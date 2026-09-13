@@ -79,8 +79,11 @@ $('pay').value = q.get('pay') ?? localStorage.getItem('datstr.pay') ?? '';
 // identity (SPEC 4 and 7): with a Nostr login the tab is its own master; it signs a descriptor with its payout
 // address and a delegation to the worker key the gateway derives for it, via NIP-07 (xlogin provides window.nostr)
 let me = null; // { master } when logged in with Nostr
-const idline = (t, cls) => { $('idline').textContent = t; $('idline').className = cls ?? 'motd'; };
-const showIdentity = () => { if (me) idline(`Nostr master ${me.master.slice(0, 12)}… · paid to ${$('pay').value.trim() || '(enter an address)'} · the gateway holds only a delegated worker key`, 'good'); else idline($('pay').value.trim() ? `mining as address ${$('pay').value.trim().slice(0, 14)}…, paid there` : `not logged in: mining as the gateway's address`); };
+const EXPLORER = { 'btc:testnet4-blake2b': 'https://mempool.guide/testnet4', 'btc:mainnet-blake2b': 'https://mempool.guide' };
+let chainId = null; fetch(new URL('stats.json', location.href), { cache: 'no-store' }).then((r) => r.json()).then((g) => { chainId = g.network; }).catch(() => {});
+const addrLink = (a) => { const ex = EXPLORER[chainId]; return ex ? `<a href="${ex}/address/${esc(a)}" target="_blank" rel="noopener">${esc(a)}</a>` : esc(a); };
+const idline = (t, cls) => { $('idline').innerHTML = t; $('idline').className = cls ?? 'motd'; };
+const showIdentity = () => { const pay = $('pay').value.trim(); if (me) idline(`Nostr master ${esc(me.master.slice(0, 12))}… · paid to ${pay ? addrLink(pay) : '(enter an address)'} · the gateway holds only a delegated worker key`, 'good'); else idline(pay ? `mining as address ${addrLink(pay)}, paid there` : `not logged in: mining as the gateway's address`); };
 document.addEventListener('xlogin', (e) => { if (e.detail.type === 'nostr') { me = { master: e.detail.id }; showIdentity(); log(`logged in: Nostr ${e.detail.id.slice(0, 16)}…`); if (ws && ws.readyState === 1) identify(); } });
 // xlogin restores a saved session before this module runs, so its event may already have fired: read the state too
 const adoptLogin = () => { if (!me && window.xlogin?.type === 'nostr' && window.xlogin.id) { me = { master: window.xlogin.id }; showIdentity(); log(`logged in: Nostr ${me.master.slice(0, 16)}… (restored session)`); if (ws && ws.readyState === 1) identify(); } };
@@ -90,7 +93,7 @@ $('loginlink').onclick = (e) => { e.preventDefault(); window.xlogin?.login(); };
 $('pay').onchange = showIdentity;
 async function identify() {
   const pay = $('pay').value.trim();
-  if (!me) return; if (!pay) { idline(`Nostr master ${me.master.slice(0, 12)}… logged in, but no payout address: enter a tb1p address in "pay to" and press stop, then start`, 'stale'); return log('identity: enter a payout address for this chain in "pay to", then stop and start', 'i'); }
+  if (!me) return; if (!pay) { idline(`Nostr master ${esc(me.master.slice(0, 12))}… logged in, but no payout address: enter a tb1p address in "pay to" and press stop, then start`, 'stale'); return log('identity: enter a payout address for this chain in "pay to", then stop and start', 'i'); }
   send({ id: '3', method: 'mining.datstr_worker', params: [me.master, pay] });
 }
 async function signIdentity(worker, chain, payout) {
@@ -230,7 +233,7 @@ async function onLine(line) {
   if (m.id === '1' && Array.isArray(m.result)) { en1 = m.result[1]; en2size = m.result[2]; log(`subscribed: extranonce1 ${en1}, extranonce2 ${en2size} bytes`); return; }
   if (m.id === '2') { log(m.result === true ? 'authorized' : 'authorize refused: ' + JSON.stringify(m.error), m.result === true ? 'b' : 'i'); if (m.result === true && me) identify(); return; }
   if (m.id === '3') { if (m.error) return log('identity: ' + (m.error[1] ?? JSON.stringify(m.error)), 'i'); log(`identity: the gateway derives worker ${m.result.worker.slice(0, 12)}… for my master; signing the descriptor and delegation`); signIdentity(m.result.worker, m.result.chain, m.result.payout).catch((e) => log('identity: signing failed: ' + e.message, 'i')); return; }
-  if (m.id === '4') { if (m.error) return log('identity: refused: ' + (m.error[1] ?? JSON.stringify(m.error)), 'i'); log(`identity: mining as master ${m.result.master.slice(0, 12)}…, paid at ${$('pay').value.trim()}`, 'b'); idline(`Nostr master ${m.result.master.slice(0, 12)}… · paid to ${$('pay').value.trim()} · worker ${m.result.worker.slice(0, 12)}… on the gateway`, 'good'); return; }
+  if (m.id === '4') { if (m.error) return log('identity: refused: ' + (m.error[1] ?? JSON.stringify(m.error)), 'i'); log(`identity: mining as master ${m.result.master.slice(0, 12)}…, paid at ${$('pay').value.trim()}`, 'b'); idline(`Nostr master ${esc(m.result.master.slice(0, 12))}… · paid to ${addrLink($('pay').value.trim())} · worker ${esc(m.result.worker.slice(0, 12))}… on the gateway`, 'good'); return; }
   if (pending.has(String(m.id))) { pending.delete(String(m.id)); if (m.result === true) { stats.accepted++; log('share accepted', 'b'); bump(earn.perShare || 1, 'share'); } else { stats.rejected++; log('share rejected: ' + (m.error?.[1] ?? JSON.stringify(m.error)), 'i'); } return; }
   const { parseNotify, targetForDifficulty } = await import(CORE);
   if (m.method === 'mining.set_difficulty') { stats.diff = m.params[0]; target = targetForDifficulty(stats.diff); log(`difficulty ${stats.diff}`); if (job) dispatch(); }
