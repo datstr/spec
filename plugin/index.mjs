@@ -4,8 +4,14 @@
 // Gateways connect to ws(s)://host/datstr/ws; documents are served under /datstr/.
 import { createCoordinator, routes } from './coordinator.mjs';
 
+// Config comes from the JSS config entry (api.config) or, for the --plugin flag which carries
+// none, from the environment: DATSTR_CONF, DATSTR_NETWORK, DATSTR_DATA, DATSTR_ACTIVATION,
+// DATSTR_HEADLINE, DATSTR_KEY, and DATSTR_PARAMS as JSON ({"windowMinWeight":4,...}).
 export async function activate(api) {
-  const cfg = api.config ?? {};
+  const env = process.env;
+  const cfg = { ...(env.DATSTR_CONF ? { conf: env.DATSTR_CONF } : {}), ...(env.DATSTR_NETWORK ? { network: env.DATSTR_NETWORK } : {}), ...(env.DATSTR_DATA ? { dataDir: env.DATSTR_DATA } : {}),
+    ...(env.DATSTR_ACTIVATION ? { activation: env.DATSTR_ACTIVATION } : {}), ...(env.DATSTR_HEADLINE ? { headline: env.DATSTR_HEADLINE } : {}), ...(env.DATSTR_KEY ? { key: env.DATSTR_KEY } : {}),
+    ...(env.DATSTR_PARAMS ? { params: JSON.parse(env.DATSTR_PARAMS) } : {}), ...(api.config ?? {}) };
   const dataDir = cfg.dataDir ?? api.storage.pluginDir();
   const log = (...a) => api.log.info(a.join(' '));
   const info = api.serverInfo?.() ?? {};
@@ -16,7 +22,7 @@ export async function activate(api) {
     const [status, type, body] = await route(req.url.split('?')[0].slice(api.prefix.length));
     reply.code(status).type(type).header('access-control-allow-origin', '*').send(body);
   });
-  api.ws.route(`${api.prefix}/ws`, (socket, request) => {
+  await api.ws.route(`${api.prefix}/ws`, (socket, request) => {
     co.connect({
       remote: request?.socket ? `${request.socket.remoteAddress}:${request.socket.remotePort}` : null,
       send: (s) => socket.send(s), onMessage: (cb) => socket.on('message', (d) => cb(d.toString())), onClose: (cb) => socket.on('close', cb), close: () => socket.close(),

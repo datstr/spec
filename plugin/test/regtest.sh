@@ -6,11 +6,15 @@
 #
 #   plugin/test/regtest.sh [--keep]
 #   BITCOIND, BITCOIN_CLI, SIA_TEST_MINER, TIMEOUT (default 400), BLOCKS (pooled blocks, default 6)
+#   HOST=standalone (default) or HOST=jss: the coordinator as a JSS plugin on a throwaway jss
 set -euo pipefail
 BITCOIND=${BITCOIND:-$HOME/bitcoin-knots/src/build/bin/bitcoind}
 BITCOIN_CLI=${BITCOIN_CLI:-$HOME/bitcoin-knots/src/build/bin/bitcoin-cli}
 SIA_TEST_MINER=${SIA_TEST_MINER:-$HOME/remote/github.com/iohzrd/ratum/target/release/sia-test-miner}
 TIMEOUT=${TIMEOUT:-400}; BLOCKS=${BLOCKS:-6}; KEEP=0; [ "${1:-}" = "--keep" ] && KEEP=1
+HOST=${HOST:-standalone}
+# a jss with --plugin support (JSS 0.0.219 or later); jspod bundles one
+JSS=${JSS:-$HOME/.nvm/versions/node/v24.16.0/lib/node_modules/jspod/node_modules/.bin/jss}
 ACTIVATION=20; HEADLINE="datstr e2e headline"
 PAY_A=bcrt1qw508d6qejxtdg4y5r3zarvary0c5xw7kygt080; PAY_B=bcrt1qzyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3lgth6c
 KEY_A=1111111111111111111111111111111111111111111111111111111111111111; KEY_B=2222222222222222222222222222222222222222222222222222222222222222
@@ -33,10 +37,19 @@ for _ in $(seq 60); do cli getblockchaininfo >/dev/null 2>&1 && break; sleep 0.5
 cli generatetoaddress "$ACTIVATION" "$PAY_A" >/dev/null
 COMMON=(--conf "$WORK/node/bitcoin.conf" --network btc:regtest-blake2b --activation $ACTIVATION --headline "$HEADLINE")
 
-step "coordinator on port $CO_PORT (window at least 4 shares)"
-start_co() { node "$HERE/plugin/standalone.mjs" "${COMMON[@]}" --data "$WORK/co" --port "$CO_PORT" --window-min-weight 4 >> "$WORK/co.log" 2>&1 & CO_PID=$!; PIDS+=($CO_PID); }
+if [ "$HOST" = jss ]; then
+  step "coordinator as a JSS plugin on port $CO_PORT (window at least 4 shares)"
+  CO_URL="http://127.0.0.1:$CO_PORT/datstr"; CO_WS="ws://127.0.0.1:$CO_PORT/datstr/ws"
+  start_co() { DATSTR_CONF="$WORK/node/bitcoin.conf" DATSTR_NETWORK=btc:regtest-blake2b DATSTR_ACTIVATION=$ACTIVATION DATSTR_HEADLINE="$HEADLINE" DATSTR_DATA="$WORK/co" DATSTR_PARAMS='{"windowMinWeight":4}' \
+    "$JSS" start --port "$CO_PORT" --root "$WORK/jss" --no-git --plugin "$HERE/plugin/index.mjs@/datstr" >> "$WORK/co.log" 2>&1 & CO_PID=$!; PIDS+=($CO_PID); }
+else
+  step "coordinator on port $CO_PORT (window at least 4 shares)"
+  CO_URL="http://127.0.0.1:$CO_PORT"; CO_WS="ws://127.0.0.1:$CO_PORT/ws"
+  start_co() { node "$HERE/plugin/standalone.mjs" "${COMMON[@]}" --data "$WORK/co" --port "$CO_PORT" --window-min-weight 4 >> "$WORK/co.log" 2>&1 & CO_PID=$!; PIDS+=($CO_PID); }
+fi
 start_co
-waitfor "$WORK/co.log" 'coordinator: ws' || { cat "$WORK/co.log"; fail "coordinator did not start"; }
+for _ in $(seq 60); do curl -sf "$CO_URL/pool.json" >/dev/null 2>&1 && break; sleep 0.5; done
+curl -sf "$CO_URL/pool.json" >/dev/null || { tail -20 "$WORK/co.log"; fail "coordinator did not start at $CO_URL"; }
 
 step "a master key for B, delegating to B's worker key (made off the gateway)"
 node "$HERE/gateway/delegate.mjs" --new-master --out "$WORK/master-b" | sed 's/^/  /'
@@ -45,8 +58,8 @@ node "$HERE/gateway/delegate.mjs" --master-key-file "$WORK/master-b/master.key" 
 MASTER_B=$(python3 -c "import json; print(json.load(open('$WORK/master-b/descriptor.json'))['pubkey'])")
 
 step "two gateways (B delegated), two miners"
-node "$HERE/gateway/serve.mjs" "${COMMON[@]}" --pay $PAY_A --key $KEY_A --port $ST_A --api $API_A --diff 1 --poll 1 --pool "ws://127.0.0.1:$CO_PORT/ws" > "$WORK/gw-a.log" 2>&1 & PIDS+=($!)
-node "$HERE/gateway/serve.mjs" "${COMMON[@]}" --pay $PAY_B --key $KEY_B --port $ST_B --api $API_B --diff 1 --poll 1 --pool "ws://127.0.0.1:$CO_PORT/ws" --descriptor "$WORK/master-b/descriptor.json" --delegation "$WORK/master-b/delegation-${WORKER_B:0:16}.json" > "$WORK/gw-b.log" 2>&1 & PIDS+=($!)
+node "$HERE/gateway/serve.mjs" "${COMMON[@]}" --pay $PAY_A --key $KEY_A --port $ST_A --api $API_A --diff 1 --poll 1 --pool "$CO_WS" > "$WORK/gw-a.log" 2>&1 & PIDS+=($!)
+node "$HERE/gateway/serve.mjs" "${COMMON[@]}" --pay $PAY_B --key $KEY_B --port $ST_B --api $API_B --diff 1 --poll 1 --pool "$CO_WS" --descriptor "$WORK/master-b/descriptor.json" --delegation "$WORK/master-b/delegation-${WORKER_B:0:16}.json" > "$WORK/gw-b.log" 2>&1 & PIDS+=($!)
 waitfor "$WORK/gw-a.log" 'pool: welcome' && waitfor "$WORK/gw-b.log" 'pool: welcome' || { tail -5 "$WORK/gw-a.log" "$WORK/gw-b.log" "$WORK/co.log"; fail "gateways did not join the coordinator"; }
 "$SIA_TEST_MINER" 127.0.0.1:$ST_A "$PAY_A.a" > "$WORK/miner-a.log" 2>&1 & PIDS+=($!)
 "$SIA_TEST_MINER" 127.0.0.1:$ST_B "$PAY_B.b" > "$WORK/miner-b.log" 2>&1 & PIDS+=($!)
@@ -57,8 +70,10 @@ deadline=$((SECONDS + TIMEOUT)); h=0
 while [ $SECONDS -lt $deadline ]; do h=$(cli getblockcount 2>/dev/null || echo 0); [ "$h" -ge "$TARGET" ] && break; sleep 1; done
 [ "$h" -ge "$TARGET" ] || { tail -8 "$WORK/co.log" "$WORK/gw-a.log"; fail "no block at $TARGET within ${TIMEOUT}s"; }
 
-step "the last pooled block pays the window"
-H=$TARGET; HASH=$(cli getblockhash $H)
+step "the latest block whose split paid both masters follows its snapshot"
+H=""; for h in $(seq $TARGET -1 $((ACTIVATION + 1))); do n=$(python3 -c "import json; print(len(json.load(open('$WORK/co/snapshots/$h.json'))['outputs']))" 2>/dev/null || echo 0); [ "$n" -ge 2 ] && { H=$h; break; }; done
+[ -n "$H" ] || fail "no block up to $TARGET had a two-master split; the window never held both (increase BLOCKS)"
+HASH=$(cli getblockhash $H); echo "  block $H"
 OUTS=$(cli getblock "$HASH" 2 | python3 -c 'import json,sys
 b=json.load(sys.stdin)
 for o in b["tx"][0]["vout"]: print(o["scriptPubKey"]["hex"], round(o["value"]*1e8))')
@@ -86,7 +101,7 @@ print(f'  {len(byB)} shares signed by worker B, all credited to master B')
 PY
 
 step "independent replay of snapshot $H"
-node "$HERE/audit/replay.mjs" --data "$WORK/co" --height $H | sed 's/^/  /'
+node "$HERE/audit/replay.mjs" --url "$CO_URL" --height $H | sed 's/^/  /'
 
 step "coordinator down: gateways go solo"
 kill $CO_PID; sleep 2
@@ -100,11 +115,12 @@ echo "  block $SH mined solo, one payout output"
 
 step "coordinator back: window intact, gateways rejoin"
 BEFORE=$(wc -l < "$WORK/co/shares.jsonl")
-start_co; waitfor "$WORK/co.log" "$BEFORE shares" || { tail -3 "$WORK/co.log"; fail "coordinator did not reload $BEFORE shares"; }
+start_co; for _ in $(seq 60); do curl -sf "$CO_URL/stats.json" 2>/dev/null | grep -q "\"shares_total\":$BEFORE" && break; sleep 0.5; done
+curl -sf "$CO_URL/stats.json" | grep -q "\"shares_total\":$BEFORE" || { tail -3 "$WORK/co.log"; fail "coordinator did not reload $BEFORE shares"; }
 waitfor "$WORK/gw-a.log" 'pool: welcome.*\n.*pool: welcome' 1 || true
 for _ in $(seq 60); do [ "$(grep -c 'pool: welcome' "$WORK/gw-a.log")" -ge 2 ] && [ "$(grep -c 'pool: welcome' "$WORK/gw-b.log")" -ge 2 ] && break; sleep 0.5; done
 [ "$(grep -c 'pool: welcome' "$WORK/gw-a.log")" -ge 2 ] || fail "gateway A did not rejoin"
 echo "  reloaded $BEFORE shares; both gateways rejoined"
 
 step "passed: two gateways paid by one coinbase, replay matches, solo fallback and rejoin work"
-grep -c 'share #' "$WORK/co.log" | sed 's/^/shares credited: /'; grep -c 'BLOCK h' "$WORK/co.log" | sed 's/^/blocks recorded: /'
+curl -sf "$CO_URL/stats.json" | python3 -c "import json,sys; s=json.load(sys.stdin); print('shares credited:', s['shares_total']); print('blocks recorded:', s['stats']['blocks'])"
