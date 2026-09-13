@@ -57,7 +57,7 @@
   <button type="submit" id="go">start</button>
 </form>
 <div class="earn" id="earn">
-  <div><div class="label">estimated sats earned, this session</div><div class="counter" id="counter">0<small>sats</small></div><div class="bar"><span id="winbar"></span></div><div class="motd" id="winline">joining the pool's window…</div></div>
+  <div><div class="label">your sats: paid on chain, plus your line in the next block</div><div class="counter" id="counter">0<small>sats</small></div><div class="bar"><span id="winbar"></span></div><div class="motd" id="winline">joining the pool's window…</div></div>
   <div class="side" id="side">next block pays you <b>–</b><br>paid on chain so far <b>–</b><br>blocks while mining <b>–</b></div>
 </div>
 <div class="earn" id="clock" style="grid-template-columns:auto 1fr;gap:1.4rem"><div><div class="label" id="clocklabel">next window</div><div class="counter" id="countdown" style="color:var(--accent)">–</div></div><div class="motd" id="clocknote"></div></div>
@@ -133,6 +133,8 @@ async function pollPool() {
     const mine = s.masters.find((m) => m.address === addr);
     earn.myWeight = mine?.weight_window ?? 0; earn.W = s.window.weight; earn.V = s.split?.value ?? s.tip?.value ?? 0; earn.poolRate = s.hashrate ?? 0;
     const line = s.split?.outputs?.find((o) => o.address === addr); earn.nextLine = line ? line.value_sats : 0;
+    // what the chain has paid this address, all time, from the coordinator's paid ledger (survives refreshes)
+    try { const paid = await (await fetch(earn.poolBase + '/ledgers/paid.json', { cache: 'no-store' })).json(); const e = paid.entries.find((x) => x.address === addr || x.url === 'bitcoin:' + addr); earn.paidAll = e ? Number(e.amount) : 0; } catch {}
     // a share's expected value: its slice of every block the pool finds while it sits in the window (about an hour),
     // taken from how many blocks the pool found in the last hour, at least one
     const blocksLastHour = Math.max(1, s.blocks.filter((b) => b.onChain && b.at * 1000 > Date.now() - 3600000).length);
@@ -145,8 +147,9 @@ async function pollPool() {
     }
     $('winbar').style.width = (earn.W ? Math.min(100, earn.myWeight / earn.W * 100 * 20) : 0) + '%';
     $('winline').textContent = earn.W ? `your share of the pool's window: ${(earn.myWeight / earn.W * 100).toFixed(3)}% (${earn.myWeight.toFixed(4)} of ${earn.W.toFixed(1)}) · each share is worth ≈ ${satsOf(earn.perShare)} sats (pool found ${earn.blocksLastHour} block${earn.blocksLastHour === 1 ? '' : 's'} in the last hour)` : 'joining the pool\'s window…';
-    $('side').innerHTML = `next block pays you <b>${satsOf(earn.nextLine)} sats</b><br>paid on chain so far <b>${satsOf(earn.paidSats)} sats</b> in ${earn.paidBlocks} block${earn.paidBlocks === 1 ? '' : 's'}<br>blocks while mining <b>${earn.blocksWhileMining}</b>`;
-    if (earn.target < earn.nextLine + earn.paidSats) earn.target = earn.nextLine + earn.paidSats;
+    $('side').innerHTML = `next block pays you <b>${satsOf(earn.nextLine)} sats</b><br>paid on chain, all time <b>${satsOf(earn.paidAll ?? 0)} sats</b><br>this session: <b>${satsOf(earn.paidSats)} sats</b> in ${earn.paidBlocks} block${earn.paidBlocks === 1 ? '' : 's'}, ${earn.blocksWhileMining} pool block${earn.blocksWhileMining === 1 ? '' : 's'} seen`;
+    const floor = earn.nextLine + (earn.paidAll ?? earn.paidSats);
+    if (earn.target < floor) earn.target = floor;
   } catch {}
 }
 setInterval(pollPool, 5000);
@@ -239,7 +242,7 @@ function start() {
   // the stratum username: an address makes the tab its own identity paid there (SPEC 7); with a Nostr login the address goes into the signed descriptor instead
   const user = (!me && pay) ? `${pay}.${name}` : `${(gatewayPay ?? '').replace(/\.tab$/, '') || 'gateway'}.${name}`;
   if (!me && !pay) log(`no payout address: mining as the gateway's address`); else if (!me) log(`mining as ${pay}: paid there directly`);
-  earn.myAddress = pay || (gatewayPay ?? '').replace(/\.tab$/, '') || null; earn.shown = 0; earn.target = 0; earn.paidSats = 0; earn.paidBlocks = 0; earn.blocksWhileMining = 0; earn.seenBlocks = new Set(); setTimeout(pollPool, 1500);
+  earn.myAddress = pay || (gatewayPay ?? '').replace(/\.tab$/, '') || null; earn.shown = 0; earn.target = 0; earn.paidAll = null; earn.paidSats = 0; earn.paidBlocks = 0; earn.blocksWhileMining = 0; earn.seenBlocks = new Set(); setTimeout(pollPool, 1500);
   localStorage.setItem('datstr.user', name); localStorage.setItem('datstr.pay', pay); localStorage.setItem('datstr.diff', diff);
   ws = new WebSocket(url); ws.binaryType = 'arraybuffer';
   $('status').textContent = 'connecting'; $('status').className = 'chain'; $('go').textContent = 'stop'; $('go').className = 'stop';
