@@ -107,6 +107,9 @@ async function replay(base, height) {
   const masters = new Map(lines(await get('masters.jsonl')).map((m) => [m.pubkey, m]));
   let goodDesc = 0; for (const m of masters.values()) if (nostr.verifyNostrEvent(m.descriptor)) goodDesc++;
   check('miner descriptors signed by their masters', goodDesc === masters.size, `${goodDesc} of ${masters.size}`);
+  let delegations = new Map(); try { delegations = new Map(lines(await get('delegations.jsonl')).map((d) => [d.worker, d])); } catch {}
+  if (delegations.size) { let ok = 0; for (const d of delegations.values()) if (nostr.verifyNostrEvent(d.delegation) && d.delegation.pubkey === d.master && JSON.parse(d.delegation.content).worker === d.worker) ok++; check('delegations signed by the masters they name', ok === delegations.size, `${ok} of ${delegations.size} workers`); }
+  const signerOk = (ev, s) => ev.pubkey === s.master || delegations.get(ev.pubkey)?.master === s.master;
   const shares = lines(await get('shares.jsonl'));
   const snap = JSON.parse(await get(`snapshots/${height}.json`));
   check(`snapshot ${height} loaded`, true, `split ${snap.split.slice(0, 12)}… · ${snap.sharesUpTo} shares credited at issue · need ${num(snap.need, 4)}`);
@@ -125,7 +128,7 @@ async function replay(base, height) {
   for (const s of win.shares) {
     const res = { sig: null, header: null, merkle: null, commit: null, split: null, pow: null };
     let ev, c;
-    try { ev = JSON.parse(await get(`shares/${s.id}.json`)); res.sig = nostr.verifyNostrEvent(ev) && ev.pubkey === s.master; c = JSON.parse(ev.content); } catch { res.sig = false; }
+    try { ev = JSON.parse(await get(`shares/${s.id}.json`)); res.sig = nostr.verifyNostrEvent(ev) && signerOk(ev, s); c = JSON.parse(ev.content); } catch { res.sig = false; }
     if (c) {
       let header, coinbase;
       try { header = k.codec.decode('BlockHeader', c.header); res.header = header.height === c.height && c.height === s.height; } catch { res.header = false; }

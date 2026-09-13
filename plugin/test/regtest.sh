@@ -38,9 +38,15 @@ start_co() { node "$HERE/plugin/standalone.mjs" "${COMMON[@]}" --data "$WORK/co"
 start_co
 waitfor "$WORK/co.log" 'coordinator: ws' || { cat "$WORK/co.log"; fail "coordinator did not start"; }
 
-step "two gateways, two miners"
+step "a master key for B, delegating to B's worker key (made off the gateway)"
+node "$HERE/gateway/delegate.mjs" --new-master --out "$WORK/master-b" | sed 's/^/  /'
+WORKER_B=$(node -e "import('$HERE/gateway/lib/nostr.mjs').then(m => console.log(m.pubkeyOf('$KEY_B')))")
+node "$HERE/gateway/delegate.mjs" --master-key-file "$WORK/master-b/master.key" --worker "$WORKER_B" --chain btc:regtest-blake2b --activation $ACTIVATION --pay $PAY_B --out "$WORK/master-b" | sed 's/^/  /'
+MASTER_B=$(python3 -c "import json; print(json.load(open('$WORK/master-b/descriptor.json'))['pubkey'])")
+
+step "two gateways (B delegated), two miners"
 node "$HERE/gateway/serve.mjs" "${COMMON[@]}" --pay $PAY_A --key $KEY_A --port $ST_A --api $API_A --diff 1 --poll 1 --pool "ws://127.0.0.1:$CO_PORT/ws" > "$WORK/gw-a.log" 2>&1 & PIDS+=($!)
-node "$HERE/gateway/serve.mjs" "${COMMON[@]}" --pay $PAY_B --key $KEY_B --port $ST_B --api $API_B --diff 1 --poll 1 --pool "ws://127.0.0.1:$CO_PORT/ws" > "$WORK/gw-b.log" 2>&1 & PIDS+=($!)
+node "$HERE/gateway/serve.mjs" "${COMMON[@]}" --pay $PAY_B --key $KEY_B --port $ST_B --api $API_B --diff 1 --poll 1 --pool "ws://127.0.0.1:$CO_PORT/ws" --descriptor "$WORK/master-b/descriptor.json" --delegation "$WORK/master-b/delegation-${WORKER_B:0:16}.json" > "$WORK/gw-b.log" 2>&1 & PIDS+=($!)
 waitfor "$WORK/gw-a.log" 'pool: welcome' && waitfor "$WORK/gw-b.log" 'pool: welcome' || { tail -5 "$WORK/gw-a.log" "$WORK/gw-b.log" "$WORK/co.log"; fail "gateways did not join the coordinator"; }
 "$SIA_TEST_MINER" 127.0.0.1:$ST_A "$PAY_A.a" > "$WORK/miner-a.log" 2>&1 & PIDS+=($!)
 "$SIA_TEST_MINER" 127.0.0.1:$ST_B "$PAY_B.b" > "$WORK/miner-b.log" 2>&1 & PIDS+=($!)
@@ -66,6 +72,17 @@ want=[[s,int(v)] for s,v in snap['outputs']]; got=[[s,int(v)] for s,v in outs]
 print('  snapshot outputs:', want); print('  coinbase outputs:', got)
 assert want==got, 'coinbase does not follow the snapshot'
 print('  coinbase follows snapshot', snap['split'][:12], 'window', snap['window']['weight'], 'of', snap['need'])
+PY
+
+step "B's shares are credited to its master, not its worker"
+python3 - "$WORK/co/shares.jsonl" "$MASTER_B" "$WORKER_B" <<'PY'
+import json,sys
+shares=[json.loads(l) for l in open(sys.argv[1]) if l.strip()]
+byB=[s for s in shares if s.get('worker')==sys.argv[3]]
+assert byB, 'no share signed by worker B'
+assert all(s['master']==sys.argv[2] for s in byB), 'a share by worker B was not credited to master B'
+assert not any(s['master']==sys.argv[3] for s in shares), 'a share was credited to the worker key itself'
+print(f'  {len(byB)} shares signed by worker B, all credited to master B')
 PY
 
 step "independent replay of snapshot $H"

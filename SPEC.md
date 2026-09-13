@@ -92,8 +92,11 @@ that delegated it, as of the block being paid.
 
 A **delegation** (kind 33402, addressable by the worker pubkey, signed by the
 master) names the worker, the chains it may mine, and an optional expiry height per
-chain. A share signed by a worker after its delegation expired is refused with
-`delegation-expired`.
+chain: tags `["d", worker]`, `["chain", id]`, `["p", master]`, content
+`{ master, worker, chains: { <chain id>: { expires: <height or null> } } }`. A share signed
+by a worker after its delegation expired is refused with `delegation-expired`. The gateway
+presents the descriptor and the delegation at hello (section 11.1) and holds only the
+worker key; `gateway/delegate.mjs` produces both where the master key lives.
 
 Delegation is the only trust relationship in the protocol, and it is one-way: a
 worker cannot change where its master is paid.
@@ -319,6 +322,13 @@ in the window. The coordinator issues one for the next height `splitDelay` secon
 default) after it sees a new tip, so the share that found the block is credited first, and
 sends it to every connected gateway and to any gateway that connects later.
 
+A gateway checks a split before following it, since the split is the one instruction it
+takes from outside: if the gateway's own shares fall inside the split's window (by `seq`)
+and the outputs pay its master nothing, or if any output pays a script no master has
+registered (the coordinator's `/masters.jsonl`), the gateway refuses the split and mines
+solo for that height. A coordinator that lies about the split therefore loses the hashrate,
+not the miner's block.
+
 A gateway includes the split in its next job and names its id in every share. A gateway
 that has just seen a new tip but no split for it yet waits up to `splitWait` seconds (3 by
 default) before it publishes solo work, and rebuilds its job as soon as the split arrives.
@@ -383,7 +393,7 @@ A gateway talks to a coordinator over one WebSocket carrying JSON messages, each
 
 | from | type | fields |
 |---|---|---|
-| gateway | `hello` | `descriptor`: the miner descriptor event; `agent`: software and version |
+| gateway | `hello` | `descriptor`: the miner descriptor event; `delegation`: the delegation event when the signer is a worker; `agent`: software and version |
 | coordinator | `welcome` | `pool`: the pool descriptor event; `split`: the current split event or null |
 | coordinator | `split` | `event`: a split (section 9.3) |
 | gateway | `share` | `event`: a share (section 8) |

@@ -20,7 +20,7 @@ export class Coordinator {
     this.params = { ...DEFAULTS, ...Object.fromEntries(Object.entries(params).filter(([, v]) => v !== undefined && !Number.isNaN(v))) };
     this.pubkey = pubkeyOf(key);
     this.chain = this.params.chain;
-    this.shares = []; this.seen = new Set(); this.masters = new Map(); this.clients = new Set();
+    this.shares = []; this.seen = new Set(); this.masters = new Map(); this.workers = new Map(); this.clients = new Set();
     this.splits = new Map(); this.blocks = []; this.owed = {}; this.tip = null; this.prevAt = new Map();
     this.stats = { shares: 0, rejected: 0, blocks: 0, byCode: {} };
     this.started = Date.now();
@@ -31,6 +31,7 @@ export class Coordinator {
     await mkdir(`${this.dataDir}/snapshots`, { recursive: true }); await mkdir(`${this.dataDir}/blocks`, { recursive: true }); await mkdir(`${this.dataDir}/shares`, { recursive: true });
     const lines = async (f) => existsSync(f) ? (await readFile(f, 'utf8')).split('\n').filter(Boolean).map((l) => JSON.parse(l)) : [];
     for (const m of await lines(`${this.dataDir}/masters.jsonl`)) this.masters.set(m.pubkey, m);
+    for (const d of await lines(`${this.dataDir}/delegations.jsonl`)) this.workers.set(d.worker, d);
     for (const s of await lines(`${this.dataDir}/shares.jsonl`)) { this.shares.push(s); this.seen.add(s.hash); }
     for (const b of await lines(`${this.dataDir}/blocks.jsonl`)) this.blocks.unshift(b);
     if (existsSync(`${this.dataDir}/owed.json`)) this.owed = JSON.parse(await readFile(`${this.dataDir}/owed.json`, 'utf8'));
@@ -105,8 +106,19 @@ export class Coordinator {
       this.masters.set(d.pubkey, { pubkey: d.pubkey, payout: payout.toLowerCase(), descriptor: d });
       await appendFile(`${this.dataDir}/masters.jsonl`, JSON.stringify(this.masters.get(d.pubkey)) + '\n');
     }
+    // a delegation (kind 33402) signed by the same master names the worker key the gateway signs with
+    const g = m.delegation;
+    if (g) {
+      if (g.kind !== KIND.delegation || !verifyEvent(g) || g.pubkey !== d.pubkey) return conn.send({ type: 'error', error: 'delegation must be kind 33402 signed by the descriptor\'s master' });
+      const gc = contentOf(g); const worker = gc?.worker, rule = gc?.chains?.[this.chain];
+      if (!/^[0-9a-f]{64}$/i.test(worker ?? '') || !rule) return conn.send({ type: 'error', error: 'delegation names no worker for this chain' });
+      const rec = { worker: worker.toLowerCase(), master: d.pubkey, expires: rule.expires ?? null, delegation: g };
+      const old = this.workers.get(rec.worker);
+      if (!old || old.delegation.created_at < g.created_at) { this.workers.set(rec.worker, rec); await appendFile(`${this.dataDir}/delegations.jsonl`, JSON.stringify(rec) + '\n'); }
+      conn.worker = rec.worker;
+    }
     conn.master = d.pubkey; conn.agent = m.agent ?? '';
-    this.log(`gateway ${conn.remote ?? ''} hello: master ${d.pubkey.slice(0, 16)}… (${conn.agent})`);
+    this.log(`gateway ${conn.remote ?? ''} hello: master ${d.pubkey.slice(0, 16)}…${conn.worker ? ` worker ${conn.worker.slice(0, 16)}…` : ''} (${conn.agent})`);
     const split = this.tip && this.splits.get(this.tip.height);
     conn.send({ type: 'welcome', pool: this.descriptor, split: split?.event ?? null });
   }
@@ -116,8 +128,12 @@ export class Coordinator {
     const fail = (code, detail) => ({ ok: false, code, detail });
     if (ev.kind !== KIND.share || !verifyEvent(ev)) return fail('sig');
     const c = contentOf(ev); if (!c) return fail('content');
-    const master = this.masters.get(ev.pubkey);
-    if (!master) return fail('delegation-missing', 'no miner descriptor for this key');
+    // the signer is a delegated worker, or a master signing for itself
+    const del = this.workers.get(ev.pubkey);
+    const masterKey = del ? del.master : ev.pubkey;
+    const master = this.masters.get(masterKey);
+    if (!master) return fail('delegation-missing', del ? 'delegating master has no descriptor' : 'no miner descriptor or delegation for this key');
+    if (del && del.expires != null && c.height > del.expires) return fail('delegation-expired', `expired at height ${del.expires}`);
     if (c.chain !== this.chain) return fail('chain-unknown', c.chain);
     let header; try { header = this.k.codec.decode('BlockHeader', c.header); } catch (e) { return fail('header-decode', e.message); }
     if (!this.tip) return fail('stale', 'no tip yet');
@@ -154,7 +170,7 @@ export class Coordinator {
     if (this.seen.has(d.blockHash)) return fail('duplicate');
     const netTarget = c.height === this.tip.height ? this.tip.target : null;
     const isBlock = netTarget ? meets(this.hash.hexToBytes(d.blockHash), this.hash.hexToBytes(netTarget)) : false;
-    return { ok: true, weight, master: ev.pubkey, hash: d.blockHash, isBlock, height: c.height, coinbaseTxid: cbTxid, splitId: c.split };
+    return { ok: true, weight, master: masterKey, worker: ev.pubkey, hash: d.blockHash, isBlock, height: c.height, coinbaseTxid: cbTxid, splitId: c.split };
   }
 
   async share(conn, ev) {
@@ -164,7 +180,7 @@ export class Coordinator {
       this.log(`share ${ev?.id?.slice(0, 12)}… refused: ${r.code}${r.detail ? ' (' + r.detail + ')' : ''}`);
       return conn.send({ type: 'ack', event: signEvent(this.key, { kind: KIND.ack, tags: [['e', ev?.id ?? '']], content: { share: ev?.id ?? null, result: r.code, detail: r.detail ?? null, weight: 0 } }) });
     }
-    const rec = { seq: this.shares.length + 1, id: ev.id, master: r.master, weight: r.weight, height: r.height, hash: r.hash, split: r.splitId, at: Math.floor(Date.now() / 1000) };
+    const rec = { seq: this.shares.length + 1, id: ev.id, master: r.master, worker: r.worker, weight: r.weight, height: r.height, hash: r.hash, split: r.splitId, at: Math.floor(Date.now() / 1000) };
     this.shares.push(rec); this.seen.add(r.hash); this.stats.shares++;
     await appendFile(`${this.dataDir}/shares.jsonl`, JSON.stringify(rec) + '\n');
     await writeFile(`${this.dataDir}/shares/${ev.id}.json`, JSON.stringify(ev));
@@ -204,7 +220,8 @@ export class Coordinator {
       masters: [...this.masters.values()].map((m) => ({ pubkey: m.pubkey, payout: m.payout, address: addr(m.payout), weight_window: perMaster[m.pubkey] ?? 0, weight_total: totalByMaster[m.pubkey] ?? 0, last_share_seconds: lastByMaster[m.pubkey] ? Math.floor(now / 1000 - lastByMaster[m.pubkey]) : null, connected: [...this.clients].some((c) => c.master === m.pubkey) })),
       window: { shares: win.shares.length, weight: win.weight, need: this.need(), perMaster, from_seq: win.shares[0]?.seq ?? null, to_seq: win.shares.at(-1)?.seq ?? null },
       split: split ? { id: split.event.id, height: split.height, issued_seconds_ago: Math.floor((now - split.issued) / 1000), outputs: split.outputs.map(([spk, v]) => ({ script: spk, value_sats: v, address: addr(spk) })), value: this.tip.value } : null,
-      gateways: [...this.clients].map((c) => ({ remote: c.remote ?? null, master: c.master ?? null, agent: c.agent ?? null })), owed: this.owed, blocks: this.blocks.slice(0, 50),
+      gateways: [...this.clients].map((c) => ({ remote: c.remote ?? null, master: c.master ?? null, worker: c.worker ?? null, agent: c.agent ?? null })), owed: this.owed, blocks: this.blocks.slice(0, 50),
+      workers: [...this.workers.values()].map((w) => ({ worker: w.worker, master: w.master, expires: w.expires })),
     };
   }
 }
@@ -248,6 +265,7 @@ export async function routes(co) {
     if ((m = /^\/blocks\/([0-9a-f]{64})\.json$/.exec(path))) return file(`${co.dataDir}/blocks/${m[1]}.json`);
     if ((m = /^\/shares\/([0-9a-f]{64})\.json$/.exec(path))) return file(`${co.dataDir}/shares/${m[1]}.json`);
     if (path === '/shares.jsonl') return existsSync(`${co.dataDir}/shares.jsonl`) ? [200, 'application/x-ndjson', await readFile(`${co.dataDir}/shares.jsonl`, 'utf8')] : [200, 'application/x-ndjson', ''];
+    if (path === '/delegations.jsonl') return existsSync(`${co.dataDir}/delegations.jsonl`) ? [200, 'application/x-ndjson', await readFile(`${co.dataDir}/delegations.jsonl`, 'utf8')] : [200, 'application/x-ndjson', ''];
     if (path === '/masters.jsonl') return existsSync(`${co.dataDir}/masters.jsonl`) ? [200, 'application/x-ndjson', await readFile(`${co.dataDir}/masters.jsonl`, 'utf8')] : [200, 'application/x-ndjson', ''];
     return safe(path) ? [404, 'text/plain', 'not found'] : [404, 'text/plain', 'not found'];
   };

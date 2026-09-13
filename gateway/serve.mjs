@@ -7,6 +7,13 @@
 //                          [--stop-height N] [--min-bits 1d00ffff] [--api 3334]
 //                          [--pool ws://host:port/ws] [--key <hex>] [--key-file <path>]
 //                          [--vardiff on|off] [--vardiff-target 10] [--vardiff-min 0.0001] [--vardiff-max 1000000]
+//                          [--descriptor <file> --delegation <file>]
+//
+// --descriptor F   a miner descriptor (kind 33401) signed by a master key, with
+// --delegation F   a delegation (kind 33402) from that master to this gateway's worker key,
+//                  both made by gateway/delegate.mjs where the master key lives. The
+//                  coordinator then credits the master and the gateway never holds its key.
+//                  Without them the worker is its own master, paid at --pay.
 //
 // --diff D         the difficulty every miner starts at (ratum's convention: 1 expects 2^32 hashes).
 // --vardiff        on by default: each connection's difficulty moves so it sends a share about
@@ -65,26 +72,53 @@ if (!KEY) {
 }
 const WORKER = pubkeyOf(KEY);
 const pool = { url: args.pool ?? null, ws: null, connected: false, pubkey: null, splits: new Map(), acked: 0, refused: 0, lastAck: null, backoff: 1000 };
-const descriptor = () => signEvent(KEY, { kind: 33401, tags: [['d', WORKER], ['chain', NETWORK]], content: { chain: NETWORK, payout: { [NETWORK]: payScripts[0] } } });
+const DESCRIPTOR = args.descriptor ? JSON.parse(await readFile(args.descriptor, 'utf8')) : null;
+const DELEGATION = args.delegation ? JSON.parse(await readFile(args.delegation, 'utf8')) : null;
+if (DESCRIPTOR && !verifyEvent(DESCRIPTOR)) throw new Error('--descriptor does not verify');
+if (DELEGATION && (!verifyEvent(DELEGATION) || (contentOf(DELEGATION)?.worker ?? '').toLowerCase() !== WORKER)) throw new Error(`--delegation does not verify or is not for this worker ${WORKER}`);
+if ((DESCRIPTOR && !DELEGATION) || (!DESCRIPTOR && DELEGATION)) throw new Error('--descriptor and --delegation go together');
+const MASTER = DESCRIPTOR ? DESCRIPTOR.pubkey : WORKER;
+const MASTER_PAYOUT = DESCRIPTOR ? (contentOf(DESCRIPTOR)?.payout?.[NETWORK] ?? '').toLowerCase() : payScripts[0];
+if (DESCRIPTOR && !MASTER_PAYOUT) throw new Error(`--descriptor has no payout for ${NETWORK}`);
+const descriptor = () => DESCRIPTOR ?? signEvent(KEY, { kind: 33401, tags: [['d', WORKER], ['chain', NETWORK]], content: { chain: NETWORK, payout: { [NETWORK]: payScripts[0] } } });
+const ackedSeqs = []; // seq of every share the coordinator credited, for the split guard
+let mastersKnown = { at: 0, scripts: new Set() };
+async function knownScripts() {
+  if (Date.now() - mastersKnown.at < 60000) return mastersKnown.scripts;
+  try { const t = await (await fetch(pool.url.replace(/^ws/, 'http').replace(/\/ws$/, '/masters.jsonl'))).text(); mastersKnown = { at: Date.now(), scripts: new Set(t.split('\n').filter(Boolean).map((l) => JSON.parse(l).payout)) }; } catch {}
+  return mastersKnown.scripts;
+}
 function poolConnect() {
   if (!pool.url) return;
   let ws; try { ws = new WebSocket(pool.url); } catch (e) { log(`pool: ${e.message}`); return setTimeout(poolConnect, pool.backoff); }
   pool.ws = ws;
-  ws.onopen = () => { pool.connected = true; pool.backoff = 1000; log(`pool: connected to ${pool.url} as ${WORKER.slice(0, 16)}…`); ws.send(JSON.stringify({ type: 'hello', descriptor: descriptor(), agent: VERSION })); };
+  ws.onopen = () => { pool.connected = true; pool.backoff = 1000; log(`pool: connected to ${pool.url} as worker ${WORKER.slice(0, 16)}…${DESCRIPTOR ? ` for master ${MASTER.slice(0, 16)}…` : ''}`); ws.send(JSON.stringify({ type: 'hello', descriptor: descriptor(), ...(DELEGATION ? { delegation: DELEGATION } : {}), agent: VERSION })); };
   ws.onmessage = async (e) => {
     const raw = typeof e.data === 'string' ? e.data : e.data instanceof Blob ? await e.data.text() : Buffer.from(e.data).toString();
     let m; try { m = JSON.parse(raw); } catch { return; }
     if (m.type === 'welcome') { pool.pubkey = m.pool?.pubkey ?? null; if (m.split) onSplit(m.split); log(`pool: welcome from ${pool.pubkey?.slice(0, 16)}…`); }
     else if (m.type === 'split') onSplit(m.event);
-    else if (m.type === 'ack') { const c = contentOf(m.event) ?? {}; if (c.result === 'ok') pool.acked++; else pool.refused++; pool.lastAck = c; if (c.result !== 'ok') log(`pool: share refused: ${c.result}${c.detail ? ' (' + c.detail + ')' : ''}`); }
+    else if (m.type === 'ack') { const c = contentOf(m.event) ?? {}; if (c.result === 'ok') { pool.acked++; if (c.seq) { ackedSeqs.push(c.seq); if (ackedSeqs.length > 10000) ackedSeqs.shift(); } } else pool.refused++; pool.lastAck = c; if (c.result !== 'ok') log(`pool: share refused: ${c.result}${c.detail ? ' (' + c.detail + ')' : ''}`); }
     else if (m.type === 'error') log(`pool: error ${m.error}`);
   };
   ws.onclose = () => { if (pool.connected) log(`pool: disconnected, solo work until it is back`); pool.connected = false; pool.ws = null; pool.backoff = Math.min(pool.backoff * 2, 30000); setTimeout(poolConnect, pool.backoff); if (current) refresh(true).catch(() => {}); };
   ws.onerror = () => {};
 }
-function onSplit(ev) {
+async function onSplit(ev) {
   if (!verifyEvent(ev) || (pool.pubkey && ev.pubkey !== pool.pubkey)) return log('pool: split with a bad signature ignored');
   const c = contentOf(ev); if (!c || c.chain !== NETWORK) return;
+  // the guard (SPEC 9.3): a split that leaves this master out while its shares are in the window,
+  // or that pays a script no master registered, is refused and the gateway mines solo for that height
+  const outs = Array.isArray(c.outputs) ? c.outputs : [];
+  const w = c.window ?? {};
+  const mine = w.from != null && w.to != null && ackedSeqs.some((q) => q >= w.from && q <= w.to);
+  const paysMe = outs.some(([spk]) => spk === MASTER_PAYOUT);
+  if (outs.length && mine && !paysMe) { pool.splits.delete(c.height); return log(`pool: split for h${c.height} REFUSED: my shares are in its window but it pays my master nothing; solo for this height`); }
+  if (outs.length) {
+    const known = await knownScripts();
+    const strangers = outs.filter(([spk]) => !known.has(spk) && spk !== MASTER_PAYOUT);
+    if (known.size && strangers.length) { pool.splits.delete(c.height); return log(`pool: split for h${c.height} REFUSED: pays ${strangers.length} script(s) no master registered (${strangers[0][0].slice(0, 20)}…); solo for this height`); }
+  }
   pool.splits.set(c.height, { id: ev.id, outputs: c.outputs, event: ev });
   for (const h of [...pool.splits.keys()]) if (h < c.height - 4) pool.splits.delete(h);
   log(`pool: split for h${c.height}, ${c.outputs.length} outputs`);
@@ -182,7 +216,7 @@ function snapshot() {
   const weight = j ? k.blocks.blockWeight({ header: j.block.header, transactions: j.block.transactions }) : 0;
   const status = holding ? 'Holding' : j ? 'Serving work' : 'No job';
   return {
-    version: VERSION, network: NETWORK, node: rpc.url, uptime_seconds: Math.floor((now - started) / 1000), status, holding, worker: WORKER,
+    version: VERSION, network: NETWORK, node: rpc.url, uptime_seconds: Math.floor((now - started) / 1000), status, holding, worker: WORKER, master: MASTER, delegated: !!DESCRIPTOR,
     pool: pool.url ? { url: pool.url, connected: pool.connected, pubkey: pool.pubkey, acked: pool.acked, refused: pool.refused, last: pool.lastAck, split: j?.splitId ?? null } : null,
     difficulty: DIFF, stop_height: STOP < Infinity ? STOP : null, min_bits: MIN_BITS, pay: payAddrs,
     work_update_seconds: REFRESH / 1000, poll_seconds: POLL / 1000, node_warnings: nodeWarnings,
