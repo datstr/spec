@@ -22,6 +22,7 @@ export class StratumServer {
     this.server = net.createServer((sock) => this.accept(sock));
     if (this.vardiff) this.timer = setInterval(() => { for (const c of this.clients) if (c.subscribed) this.retarget(c); }, 5000);
   }
+  oneSharePerJob(c) { return /^sia-test-miner/.test(c.agent ?? ''); }
   targetFor(d) { this.targets ??= new Map(); if (!this.targets.has(d)) { if (this.targets.size > 64) this.targets.clear(); this.targets.set(d, targetForDifficulty(d)); } return this.targets.get(d); }
   listen(port, host = '0.0.0.0') { return new Promise((res) => this.server.listen(port, host, () => res(this.server.address().port))); }
   close() { clearInterval(this.timer); for (const c of this.clients) c.sock.destroy(); this.server.close(); }
@@ -116,7 +117,11 @@ export class StratumServer {
         const diff = c.jobDiff.get(jobId) ?? c.diff, target = this.targetFor(diff);
         try {
           const r = await this.onShare({ job, fields, user: c.user || user, client: c, diff, target });
-          if (r.ok) { this.reply(c, id, true); c.sharesSince++; this.retarget(c); } else this.refuse(c, id, r.code ?? 23, r.reason);
+          if (r.ok) {
+            this.reply(c, id, true); c.sharesSince++; this.retarget(c);
+            // a miner that mines one share per job and then waits (ratum's sia-test-miner) gets the same job again under a new id
+            if (this.oneSharePerJob(c) && this.job && !c.sock.destroyed) { const again = { ...this.job, id: `${this.job.id}${(++this.clone).toString(16).padStart(2, '0')}` }; this.jobs.set(again.id, again); this.notify(c, again, false); }
+          } else this.refuse(c, id, r.code ?? 23, r.reason);
         } catch (e) { this.log(`stratum: share error ${e.message}`); this.refuse(c, id, 20, 'internal'); }
         return;
       }
