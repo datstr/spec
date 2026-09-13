@@ -10,13 +10,21 @@ browser: a coordinator is a page with a socket, and a miner can be a tab.
 
 - [SPEC.md](SPEC.md): the protocol, draft version 0.0.1.
 
-Planned layout, none of it written yet:
+Layout:
 
 ```
-gateway/    getblocktemplate → coinbase → stratum v1 (classic and Sia dialect) → signed shares
-plugin/     the coordinator as a JSS plugin: WebSocket for gateways, documents, audit page
-audit/      browser page that replays shares through the kernel and checks the ledger
-miner/      a CPU miner for the loop, so the whole thing runs without hardware
+gateway/    getblocktemplate → coinbase → header; later stratum v1 (classic and Sia dialect) and signed shares
+plugin/     the coordinator as a JSS plugin: WebSocket for gateways, documents, audit page   (not yet)
+audit/      browser page that replays shares through the kernel and checks the ledger      (not yet)
+```
+
+`gateway/build-block.mjs` builds a block the datstr way against a local Knots node and
+asks the node, in getblocktemplate proposal mode, whether it would accept it. It needs a
+checkout of [bitcoin-desktop/schema](https://github.com/bitcoin-desktop/schema) for the
+engine (`SCHEMA=...`), and Node 22 or later.
+
+```sh
+node gateway/build-block.mjs --conf ~/knots-testnet4/bitcoin.conf --pay <addr>[,<addr>...]
 ```
 
 First target: `btc:testnet4-blake2b` with two gateways and one coordinator, per
