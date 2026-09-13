@@ -107,10 +107,10 @@ worker cannot change where its master is paid.
 | `btc:mainnet` | btc | `btc` | 80 bytes | SHA256d | base schema |
 | `btc:testnet4` | tbtc4 | `tbtc4` | 80 bytes | SHA256d | base schema |
 | `btc:mainnet-blake2b` | xbt | `btcb2` | 164 bytes | tagged SHA-256 tree, BLAKE2b-256, XOR mask | `knots-blake2b` overlay |
-| `btc:testnet4-blake2b` | xbt4 | `tbtc4b2` | 164 bytes | as above | `knots-blake2b` overlay |
+| `btc:testnet4-blake2b` | txbt4 | `tbtc4b2` | 164 bytes | as above | `knots-blake2b` overlay |
 
 A share names its chain by `id`. The alias is the short form for configuration,
-URLs and stratum usernames: `btc`, `tbtc4`, `xbt`, `xbt4`, and the same pattern for
+URLs and stratum usernames: `btc`, `tbtc4`, `xbt`, `txbt4`, and the same pattern for
 any chain added later. A verifier that does not load the chain's kernel schema
 refuses the share with `chain-unknown` rather than guessing.
 
