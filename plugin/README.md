@@ -71,6 +71,10 @@ All in the pool descriptor (`/pool.json`), signed by the coordinator's key.
 | `staleDepth` | 3 | how many heights back a share is still credited |
 | `splitDelayMs` | 500 | wait after a new tip before issuing the split, so the block's own share is credited first |
 | `poll` | 1 | seconds between template polls |
+| `maxConnections`, `maxPerAddress` | 256, 16 | gateway sockets in all and per remote address |
+| `maxMessageBytes` | 4 MiB | largest message accepted (a share carrying a full block fits) |
+| `maxMessagesPerSecond` | 20 | per connection, with a burst of twice that; over it the socket is dropped |
+| `helloTimeoutMs` | 15000 | a socket that sends no hello in this time is dropped |
 
 ## What it serves
 
@@ -97,5 +101,6 @@ files and must match byte for byte; the audit page does the same in a tab.
 
 ## Not yet
 
-Rate limits or connection caps on the socket, JSON-LD documents in a pod, multi-chain in one
-mount, and the engine as an npm dependency rather than a checkout path.
+JSON-LD documents in a pod, multi-chain in one mount, and the engine as an npm dependency
+rather than a checkout path. The message-size limit is enforced per message after receipt;
+a frame-level cap belongs to the host (JSS's websocket plugin, or a proxy in front).

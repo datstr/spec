@@ -154,7 +154,7 @@ function makeJob(t) {
   };
 }
 
-const stratum = new StratumServer({ difficulty: DIFF, vardiff: VARDIFF, log, onShare: async ({ job, fields, user, client, diff, target }) => {
+const stratum = new StratumServer({ difficulty: DIFF, vardiff: VARDIFF, log, maxClients: Number(args['max-clients'] ?? 1024), onShare: async ({ job, fields, user, client, diff, target }) => {
   const header = { ...job.block.header, ...fields };
   const d = pow.hashHeaderV2Detailed(header);
   const powBytes = hexToBytes(d.blake2b2), hashBytes = hexToBytes(d.blockHash);

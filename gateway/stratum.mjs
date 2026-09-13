@@ -14,8 +14,9 @@ import { targetForDifficulty } from './lib/target.mjs';
 // mining.suggest_difficulty. The difficulty a share is judged at is the one its job was sent
 // at: a change re-sends the current job under a new id, so ids pin difficulties.
 export class StratumServer {
-  constructor({ onShare, difficulty = 1, vardiff = null, log = console.log }) {
+  constructor({ onShare, difficulty = 1, vardiff = null, log = console.log, maxClients = 1024, maxLineBytes = 16384, maxPerAddress = 64 }) {
     this.onShare = onShare; this.difficulty = difficulty; this.log = log;
+    this.maxClients = maxClients; this.maxLineBytes = maxLineBytes; this.maxPerAddress = maxPerAddress; this.refused = 0;
     this.vardiff = vardiff && { targetSeconds: 10, min: 0.0001, max: 1e6, window: 60, ...vardiff };
     this.clients = new Set(); this.job = null; this.jobs = new Map(); this.sid = 0; this.clone = 0;
     this.server = net.createServer((sock) => this.accept(sock));
@@ -34,10 +35,17 @@ export class StratumServer {
   retire(keep = 8) { const ids = [...this.jobs.keys()]; while (ids.length > keep) this.jobs.delete(ids.shift()); }
 
   accept(sock) {
+    const addr = sock.remoteAddress ?? '';
+    const same = [...this.clients].filter((x) => x.sock.remoteAddress === addr).length;
+    if (this.clients.size >= this.maxClients || same >= this.maxPerAddress) { this.refused++; this.log(`stratum: ${addr} refused: ${this.clients.size >= this.maxClients ? 'max clients' : 'max per address'}`); return sock.destroy(); }
     const c = { sock, buf: '', subscribed: false, user: null, en1: null, remote: `${sock.remoteAddress}:${sock.remotePort}`, diff: this.difficulty, fixedDiff: null, jobDiff: new Map(), since: Date.now(), sharesSince: 0, lastRetarget: Date.now() };
     this.clients.add(c);
     sock.setNoDelay(true);
-    sock.on('data', (d) => { c.buf += d; let i; while ((i = c.buf.indexOf('\n')) >= 0) { const line = c.buf.slice(0, i); c.buf = c.buf.slice(i + 1); if (line.trim()) this.handle(c, line); } });
+    sock.on('data', (d) => {
+      c.buf += d;
+      if (c.buf.length > this.maxLineBytes) { this.log(`stratum: ${c.remote} dropped: line over ${this.maxLineBytes} bytes`); return sock.destroy(); }
+      let i; while ((i = c.buf.indexOf('\n')) >= 0) { const line = c.buf.slice(0, i); c.buf = c.buf.slice(i + 1); if (line.trim()) this.handle(c, line); }
+    });
     sock.on('error', () => {}); sock.on('close', () => { this.clients.delete(c); this.log(`stratum: ${c.remote} closed`); });
     this.log(`stratum: ${c.remote} connected`);
   }

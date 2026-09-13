@@ -12,7 +12,9 @@ import { scriptToAddress } from '../gateway/lib/address.mjs';
 
 export const KIND = { share: 23400, ack: 23401, assignment: 23402, split: 23403, pool: 33400, miner: 33401, delegation: 33402, snapshot: 33404, block: 33405 };
 const RULES = ['segwit', 'blake2b'];
-const DEFAULTS = { feeBps: 0, feeScript: null, windowMultiple: 2, windowMinWeight: 0, minDifficulty: 1, minPayout: 546, maxOutputs: 512, staleDepth: 3, splitGrace: 30, poll: 1, splitDelayMs: 500 };
+const DEFAULTS = { feeBps: 0, feeScript: null, windowMultiple: 2, windowMinWeight: 0, minDifficulty: 1, minPayout: 546, maxOutputs: 512, staleDepth: 3, splitGrace: 30, poll: 1, splitDelayMs: 500,
+  // socket hygiene: connections in all and per remote address, bytes per message, messages per second per connection (burst is twice that)
+  maxConnections: 256, maxPerAddress: 16, maxMessageBytes: 4 * 1024 * 1024, maxMessagesPerSecond: 20, helloTimeoutMs: 15000 };
 
 export class Coordinator {
   constructor({ k, pow, hash, rpc, key, params, dataDir, log = console.log }) {
@@ -22,7 +24,8 @@ export class Coordinator {
     this.chain = this.params.chain;
     this.shares = []; this.seen = new Set(); this.masters = new Map(); this.workers = new Map(); this.clients = new Set();
     this.splits = new Map(); this.blocks = []; this.owed = {}; this.tip = null; this.prevAt = new Map();
-    this.stats = { shares: 0, rejected: 0, blocks: 0, byCode: {} };
+    this.stats = { shares: 0, rejected: 0, blocks: 0, byCode: {}, refusedConnections: 0, droppedConnections: 0 };
+    this.byAddress = new Map();
     this.started = Date.now();
   }
 
@@ -82,15 +85,31 @@ export class Coordinator {
 
   // --- a gateway connection ---
   connect(conn) {
+    const p = this.params;
     conn.send = ((send) => (s) => { try { send(typeof s === 'string' ? s : JSON.stringify(s)); } catch {} })(conn.send.bind(conn));
+    const addr = (conn.remote ?? '').replace(/:\d+$/, '');
+    const perAddr = this.byAddress.get(addr) ?? 0;
+    const drop = (why) => { this.stats.refusedConnections++; this.log(`gateway ${conn.remote ?? ''} refused: ${why}`); conn.send({ type: 'error', error: why }); try { conn.close?.(); } catch {} };
+    if (this.clients.size >= p.maxConnections) return drop(`too many connections (${p.maxConnections})`);
+    if (perAddr >= p.maxPerAddress) return drop(`too many connections from ${addr} (${p.maxPerAddress})`);
+    this.byAddress.set(addr, perAddr + 1);
     this.clients.add(conn);
-    conn.onClose(() => { this.clients.delete(conn); this.log(`gateway ${conn.remote ?? ''} closed`); });
+    let tokens = p.maxMessagesPerSecond * 2, last = Date.now(), closed = false;
+    const kick = (why) => { if (closed) return; closed = true; this.stats.droppedConnections++; this.log(`gateway ${conn.remote ?? ''} dropped: ${why}`); conn.send({ type: 'error', error: why }); try { conn.close?.(); } catch {} };
+    const helloTimer = setTimeout(() => { if (!conn.master) kick('no hello'); }, p.helloTimeoutMs);
+    conn.onClose(() => { closed = true; clearTimeout(helloTimer); this.clients.delete(conn); const n = (this.byAddress.get(addr) ?? 1) - 1; if (n > 0) this.byAddress.set(addr, n); else this.byAddress.delete(addr); this.log(`gateway ${conn.remote ?? ''} closed`); });
     conn.onMessage(async (raw) => {
+      if (closed) return;
+      const size = typeof raw === 'string' ? raw.length : raw.byteLength ?? raw.length ?? 0;
+      if (size > p.maxMessageBytes) return kick(`message of ${size} bytes over the ${p.maxMessageBytes} limit`);
+      const now = Date.now(); tokens = Math.min(p.maxMessagesPerSecond * 2, tokens + (now - last) / 1000 * p.maxMessagesPerSecond); last = now;
+      if (tokens < 1) return kick(`more than ${p.maxMessagesPerSecond} messages a second`); tokens -= 1;
       let m; try { m = JSON.parse(typeof raw === 'string' ? raw : new TextDecoder().decode(raw)); } catch { return conn.send({ type: 'error', error: 'bad json' }); }
       try {
-        if (m.type === 'hello') return await this.hello(conn, m);
-        if (m.type === 'share') return await this.share(conn, m.event);
-        conn.send({ type: 'error', error: `unknown type ${m.type}` });
+        if (m?.type === 'hello') return await this.hello(conn, m);
+        if (!conn.master) return conn.send({ type: 'error', error: 'hello first' });
+        if (m?.type === 'share') return await this.share(conn, m.event);
+        conn.send({ type: 'error', error: `unknown type ${m?.type}` });
       } catch (e) { this.log(`gateway ${conn.remote ?? ''}: ${e.message}`); conn.send({ type: 'error', error: e.message }); }
     });
   }
