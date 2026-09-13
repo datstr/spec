@@ -160,7 +160,8 @@ function render(s) {
   const link = (kind, id, text) => ex ? `<a href="${ex}/${kind}/${id}" target="_blank" rel="noopener">${text}</a>` : text;
   const st = $('status');
   st.textContent = s.status; st.className = 'chain ' + (s.status === 'Serving work' ? 'good' : s.status === 'Holding' ? 'stale' : 'bad');
-  $('pool').innerHTML = `${esc(s.network)} · node ${esc(s.node)} · no coordinator yet: every block pays ${s.pay.length === 1 ? 'the address given' : s.pay.length + ' addresses'}${s.stop_height ? ` · stops at height ${num(s.stop_height)}` : ''}${s.min_bits ? ` · min-difficulty windows only (${esc(s.min_bits)})` : ''}`;
+  const poolLine = s.pool ? (s.pool.connected ? `coordinator <a href="${esc(s.pool.url.replace(/^ws/, 'http').replace(/\/ws$/, '/stats.json'))}" target="_blank" rel="noopener">${esc(s.pool.url)}</a> (${esc((s.pool.pubkey || '').slice(0, 12))}…) · ${num(s.pool.acked)} shares acked, ${num(s.pool.refused)} refused` : `coordinator ${esc(s.pool.url)} <span class="stale">unreachable, solo work</span>`) : `no coordinator: every block pays ${s.pay.length === 1 ? 'the address given' : s.pay.length + ' addresses'}`;
+  $('pool').innerHTML = `${esc(s.network)} · node ${esc(s.node)} · ${poolLine} · worker ${esc((s.worker || '').slice(0, 12))}…${s.stop_height ? ` · stops at height ${num(s.stop_height)}` : ''}${s.min_bits ? ` · min-difficulty windows only (${esc(s.min_bits)})` : ''}`;
   $('version').textContent = s.version || '';
   const notes = [];
   if (s.holding) notes.push('Holding: ' + esc(s.holding));

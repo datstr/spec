@@ -5,6 +5,12 @@
 //   node gateway/serve.mjs --conf <bitcoin.conf> --network btc:testnet4-blake2b --pay <addr>[,<addr>]
 //                          [--port 3333] [--diff 1] [--poll 2] [--refresh 30] [--worker <hex>] [--activation N]
 //                          [--stop-height N] [--min-bits 1d00ffff] [--api 3334]
+//                          [--pool ws://host:port/ws] [--key <hex>] [--key-file <path>]
+//
+// --pool URL       a datstr coordinator. The gateway signs shares with its worker key, follows
+//                  the coordinator's coinbase split, and falls back to solo work while it is
+//                  unreachable. --key-file (default ~/.datstr/<network>.key) holds the key,
+//                  created on first run; --key overrides it.
 //
 // --api N          serve a status page at http://127.0.0.1:N/ and its data at /stats.json
 //
@@ -23,6 +29,11 @@ import { buildBlock } from './lib/block.mjs';
 import { targetForDifficulty, meets } from './lib/target.mjs';
 import { StratumServer } from './stratum.mjs';
 import { scriptToAddress } from './lib/address.mjs';
+import { signEvent, randomKey, pubkeyOf, verifyEvent, content as contentOf } from './lib/nostr.mjs';
+import { coinbaseBranches } from './lib/merkle.mjs';
+import { scaleSplit } from './lib/split.mjs';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { execSync } from 'node:child_process';
 
 const args = Object.fromEntries(process.argv.slice(2).map((a, i, all) => a.startsWith('--') ? [a.slice(2), all[i + 1] === undefined || all[i + 1].startsWith('--') ? true : all[i + 1]] : []).filter(Boolean));
@@ -39,6 +50,44 @@ const { hexToBytes, bytesToHex, taggedHash } = hash;
 const payAddrs = (args.pay ?? (await readFile(`${homedir()}/knots-testnet4/miner-addresses.txt`, 'utf8')).trim().split('\n')[0]).split(',').map((s) => s.trim());
 const payScripts = payAddrs.map((a) => { const s = script.addressToScript(a, k.params); if (!s) throw new Error(`bad address for ${NETWORK}: ${a}`); return s; });
 const shareTarget = targetForDifficulty(DIFF);
+const shareTargetHex = bytesToHex(shareTarget);
+
+// --- the worker key and the coordinator (SPEC 4, 8, 9) ---
+let KEY = args.key;
+if (!KEY) {
+  const f = (args['key-file'] ?? `~/.datstr/${NETWORK.replace(/[^a-z0-9]+/gi, '-')}.key`).replace(/^~/, homedir());
+  if (existsSync(f)) KEY = (await readFile(f, 'utf8')).trim();
+  else { KEY = randomKey(); await mkdir(f.replace(/\/[^/]+$/, ''), { recursive: true }); await writeFile(f, KEY + '\n', { mode: 0o600 }); log(`new worker key written to ${f}`); }
+}
+const WORKER = pubkeyOf(KEY);
+const pool = { url: args.pool ?? null, ws: null, connected: false, pubkey: null, splits: new Map(), acked: 0, refused: 0, lastAck: null, backoff: 1000 };
+const descriptor = () => signEvent(KEY, { kind: 33401, tags: [['d', WORKER], ['chain', NETWORK]], content: { chain: NETWORK, payout: { [NETWORK]: payScripts[0] } } });
+function poolConnect() {
+  if (!pool.url) return;
+  let ws; try { ws = new WebSocket(pool.url); } catch (e) { log(`pool: ${e.message}`); return setTimeout(poolConnect, pool.backoff); }
+  pool.ws = ws;
+  ws.onopen = () => { pool.connected = true; pool.backoff = 1000; log(`pool: connected to ${pool.url} as ${WORKER.slice(0, 16)}…`); ws.send(JSON.stringify({ type: 'hello', descriptor: descriptor(), agent: VERSION })); };
+  ws.onmessage = async (e) => {
+    const raw = typeof e.data === 'string' ? e.data : e.data instanceof Blob ? await e.data.text() : Buffer.from(e.data).toString();
+    let m; try { m = JSON.parse(raw); } catch { return; }
+    if (m.type === 'welcome') { pool.pubkey = m.pool?.pubkey ?? null; if (m.split) onSplit(m.split); log(`pool: welcome from ${pool.pubkey?.slice(0, 16)}…`); }
+    else if (m.type === 'split') onSplit(m.event);
+    else if (m.type === 'ack') { const c = contentOf(m.event) ?? {}; if (c.result === 'ok') pool.acked++; else pool.refused++; pool.lastAck = c; if (c.result !== 'ok') log(`pool: share refused: ${c.result}${c.detail ? ' (' + c.detail + ')' : ''}`); }
+    else if (m.type === 'error') log(`pool: error ${m.error}`);
+  };
+  ws.onclose = () => { if (pool.connected) log(`pool: disconnected, solo work until it is back`); pool.connected = false; pool.ws = null; pool.backoff = Math.min(pool.backoff * 2, 30000); setTimeout(poolConnect, pool.backoff); if (current) refresh(true).catch(() => {}); };
+  ws.onerror = () => {};
+}
+function onSplit(ev) {
+  if (!verifyEvent(ev) || (pool.pubkey && ev.pubkey !== pool.pubkey)) return log('pool: split with a bad signature ignored');
+  const c = contentOf(ev); if (!c || c.chain !== NETWORK) return;
+  pool.splits.set(c.height, { id: ev.id, outputs: c.outputs, event: ev });
+  for (const h of [...pool.splits.keys()]) if (h < c.height - 4) pool.splits.delete(h);
+  log(`pool: split for h${c.height}, ${c.outputs.length} outputs`);
+  if (current && current.height === c.height && current.splitId !== ev.id) refresh(true).catch(() => {});
+}
+function poolSend(obj) { if (pool.connected && pool.ws) pool.ws.send(JSON.stringify(obj)); }
+poolConnect();
 
 let jobSeq = 0, current = null, seen = new Set();
 const stats = { shares: 0, rejected: 0, blocks: 0 };
@@ -54,13 +103,16 @@ const cstat = (c) => { let x = clientStats.get(c); if (!x) { x = { shares: 0, re
 const rateOf = (samples, now) => { const cut = now - 600000; while (samples.length && samples[0][0] < cut) samples.shift(); const from = Math.max(cut, started); return samples.reduce((a, [, d]) => a + d * 4294967296, 0) / Math.max(1, (now - from) / 1000); };
 
 function makeJob(t) {
-  const b = buildBlock({ k, hash, template: t, payScripts, worker: args.worker });
+  const sp = pool.connected ? pool.splits.get(t.height) : null;
+  const split = sp && sp.outputs.length ? scaleSplit(sp.outputs, t.coinbasevalue) : null;
+  const b = buildBlock({ k, hash, template: t, payScripts, worker: WORKER, split });
   const d = pow.hashHeaderV2Detailed(b.header);
   const prevHidden = taggedHash('Bitcoin prevblock header, hashed', hexToBytes(t.previousblockhash)); prevHidden.fill(0, 0, 6);
   return {
     id: (++jobSeq).toString(16).padStart(8, '0'), height: t.height, prev: t.previousblockhash, template: t, block: b,
     prevHidden: bytesToHex(prevHidden), coinb1: '000000' + d.h2, bits: t.bits, ntimeField: '00'.repeat(8),
-    networkTarget: hexToBytes(t.target), made: Date.now(),
+    networkTarget: hexToBytes(t.target), made: Date.now(), splitId: split ? sp.id : 'solo',
+    branches: coinbaseBranches([b.cbTxid, ...t.transactions.map((x) => x.txid)]),
   };
 }
 
@@ -75,10 +127,15 @@ const stratum = new StratumServer({ difficulty: DIFF, log, onShare: async ({ job
   stats.shares++; cs.shares++; cs.lastShare = Date.now(); recent.push([Date.now(), DIFF]); cs.recent.push([Date.now(), DIFF]);
   const isBlock = meets(hashBytes, job.networkTarget);
   const stale = job.prev !== current?.prev;
-  log(`share ${d.blockHash.slice(0, 20)}… job ${job.id} h${job.height} ${user}${isBlock ? ' BLOCK' : ''}${stale ? ' (stale job)' : ''}`);
+  const blockHex = isBlock ? k.codec.encodeHex('Block', { header, transactions: job.block.transactions }) : null;
+  poolSend({ type: 'share', event: signEvent(KEY, { kind: 23400, tags: [['chain', NETWORK], ['h', String(job.height)], ['split', job.splitId]], content: {
+    chain: NETWORK, height: job.height, header: k.codec.encodeHex('BlockHeader', header), coinbase: k.codec.encodeHex('Transaction', job.block.coinbase), branches: job.branches,
+    target: shareTargetHex, split: job.splitId, parents: [], job: job.id, ...(blockHex && job.height <= STOP ? { block: blockHex } : {}),
+  } }) });
+  log(`share ${d.blockHash.slice(0, 20)}… job ${job.id} h${job.height} ${user}${isBlock ? ' BLOCK' : ''}${stale ? ' (stale job)' : ''}${job.splitId === 'solo' ? '' : ' split ' + job.splitId.slice(0, 8)}`);
   if (isBlock && job.height > STOP) { log(`BLOCK ${d.blockHash} at height ${job.height} NOT submitted: above --stop-height ${STOP}`); return { ok: true }; }
   if (isBlock) {
-    const hex = k.codec.encodeHex('Block', { header, transactions: job.block.transactions });
+    const hex = blockHex;
     const r = await rpc('submitblock', hex);
     blocks.unshift({ height: job.height, hash: d.blockHash, time: Math.floor(Date.now() / 1000), user, coinbase: job.block.cbTxid, commitment: job.block.commitment, value: job.template.coinbasevalue, txs: job.block.transactions.length, accepted: r === null, result: r });
     if (blocks.length > 200) blocks.pop();
@@ -104,7 +161,7 @@ async function refresh(force) {
   if (tip) seen = new Set();
   current = makeJob(t);
   stratum.publish(current, tip); stratum.retire(8);
-  log(`job ${current.id} h${t.height} prev ${t.previousblockhash.slice(0, 16)}… bits ${t.bits} txs ${t.transactions.length} value ${t.coinbasevalue}${tip ? ' (new tip)' : bits ? ' (bits changed)' : txs ? ' (mempool)' : ' (refresh)'}`);
+  log(`job ${current.id} h${t.height} prev ${t.previousblockhash.slice(0, 16)}… bits ${t.bits} txs ${t.transactions.length} value ${t.coinbasevalue} ${current.splitId === 'solo' ? 'solo' : 'split ' + current.splitId.slice(0, 8) + ' (' + current.block.nSplit + ' outputs)'}${tip ? ' (new tip)' : bits ? ' (bits changed)' : txs ? ' (mempool)' : ' (refresh)'}`);
 }
 
 function snapshot() {
@@ -114,7 +171,8 @@ function snapshot() {
   const weight = j ? k.blocks.blockWeight({ header: j.block.header, transactions: j.block.transactions }) : 0;
   const status = holding ? 'Holding' : j ? 'Serving work' : 'No job';
   return {
-    version: VERSION, network: NETWORK, node: rpc.url, uptime_seconds: Math.floor((now - started) / 1000), status, holding,
+    version: VERSION, network: NETWORK, node: rpc.url, uptime_seconds: Math.floor((now - started) / 1000), status, holding, worker: WORKER,
+    pool: pool.url ? { url: pool.url, connected: pool.connected, pubkey: pool.pubkey, acked: pool.acked, refused: pool.refused, last: pool.lastAck, split: j?.splitId ?? null } : null,
     difficulty: DIFF, stop_height: STOP < Infinity ? STOP : null, min_bits: MIN_BITS, pay: payAddrs,
     work_update_seconds: REFRESH / 1000, poll_seconds: POLL / 1000, node_warnings: nodeWarnings,
     stratum: { listening: true, connections: stratum.clients.size, subscriptions: [...stratum.clients].filter((c) => c.subscribed).length, hashrate },
@@ -123,7 +181,7 @@ function snapshot() {
     job: j && {
       job_id: j.id, height: j.height, previous_block: j.prev, bits: j.bits, txn_count: j.template.transactions.length, value_sats: j.template.coinbasevalue,
       txn_total_weight: weight, weightlimit: j.template.weightlimit, created_seconds_ago: Math.floor((now - j.made) / 1000), difficulty: DIFF,
-      coinbase_outputs: j.block.nSplit, payout: 'addresses', commitment: j.block.commitment,
+      coinbase_outputs: j.block.nSplit, payout: j.splitId === 'solo' ? 'gateway address' : 'pool split', commitment: j.block.commitment, split: j.splitId,
     },
     coinbaser: j ? j.block.coinbase.outputs.slice(0, j.block.nSplit).map((o, i) => ({ value_sats: o.value, address: scriptToAddress(o.scriptPubKey, k.params.bech32Hrp) ?? o.scriptPubKey, remainder: i === 0 && j.block.nSplit > 1 })) : [],
     clients: [...stratum.clients].map((c) => { const cs = cstat(c); return {
