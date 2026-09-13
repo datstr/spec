@@ -10,13 +10,11 @@ own nodes, prove their work with signed shares, and are paid directly in the coi
 of every block the network finds. There is no custody, no mandatory fee, and no
 verification logic that does not also run in a browser tab.
 
-The name is DATUM plus Nostr, and reads as Decentralized Alternative Templates and Shares
-Transmitted by Relays: the template never leaves the miner, and a share is a signed event a
-relay can carry unchanged. The semantics are DATUM's, on purpose: DATUM showed
-that a miner's own node can build the block while the pool only coordinates the
-reward, and datstr wants its gateways, its operators and its miners to feel at home.
-The wire north of the gateway is signed JSON, and a whole pool, mining included, runs
-in a browser.
+The name reads as Decentralized Alternative Templates and Shares Transmitted by Relays:
+the template never leaves the miner, and a share is a signed event a relay can carry
+unchanged. A miner's own node builds the block; the pool only coordinates the reward. The
+wire north of the gateway is signed JSON, and a whole pool, mining included, runs in a
+browser.
 
 ## 1. Principles
 
@@ -43,9 +41,10 @@ in a browser.
    what its parent contained.
 10. If the coordinator cannot run on an old Android phone, the protocol is
     over-engineered.
-11. Friendly to DATUM. The model is DATUM's, the terms are DATUM's where they fit,
-    a DATUM gateway is one adapter away from a datstr coordinator, and nothing here
-    competes with a DATUM pool for a miner's hashrate that would rather stay there.
+11. Nothing here competes for hashrate that would rather stay where it is. Existing
+    gateway software that already builds templates at the miner's node is one adapter
+    away from a datstr coordinator, and the spec keeps its semantics a superset so that
+    adapter is a translation.
 12. The browser is a full participant. It can audit the ledger, and it can mine: the
     kernel's miner plus a WebSocket to a coordinator is a miner in a tab, and a
     coordinator is a page with a socket.
@@ -290,7 +289,7 @@ of a ledger snapshot is provable with the share event and the ack alone.
 ## 9. Split
 
 The split is the coordinator's only instruction to the gateway, and it is the same
-thing DATUM's coinbaser sends: the list of outputs a coinbase must pay.
+list of outputs a coinbase must pay.
 
 ### 9.1 Window
 
@@ -319,7 +318,7 @@ reports it), the split is computed as:
 4. Drop every `pay_i` below `minPayout`. Redistribute their sum over the remaining
    masters in the same proportion, once. Their weight stays in the window.
 5. Order by `pay_i` descending, then by master pubkey ascending. Keep the first
-   `maxOutputs` (512, the DATUM coinbaser cap). Every master beyond that is
+   `maxOutputs` (512). Every master beyond that is
    **owed** `pay_i` and is paid first from the next block, before the window split,
    until cleared.
 6. Rounding dust goes to the first output.
@@ -374,8 +373,7 @@ On the BLAKE2b chains the header carries a 16-byte `xorKey` and a
 kind 23402, that fixes the key material a gateway must use for a range of heights,
 so the machine hashing cannot tell a share from a block. The gateway commits to the
 assignment through the header itself, so no extra field is needed in the share.
-This section does what DATUM v3's slots do, without the proofs, since the verifier
-relays every block anyway.
+No proofs of assignment are exchanged, since the verifier relays every block anyway.
 
 On the SHA256d chains there is no equivalent and this spec offers none. Statistical
 detection and reputation are out of scope.
@@ -538,12 +536,11 @@ Named so that the format leaves room, and otherwise not part of this spec:
 
 - **Stratum**: fully. Anything that mines to a ratum or CONVOY gateway mines to a
   datstr gateway. The work an ASIC sees is fixed by the header, not by this spec.
-- **DATUM**: same semantics, different wire. An adapter that speaks the DATUM
-  session to a stock gateway and datstr to a coordinator is a lossless translation
-  except for the encrypted session and the v3 withholding proofs, which it
-  terminates itself. It holds a pool keypair the gateway operator pins, so it is a
-  trusted component, offered by whoever wants to provide that on-ramp. Not part of
-  the core.
+- **Existing gateway protocols**: same semantics, different wire. An adapter that speaks an
+  existing pool's gateway protocol on one side and datstr on the other is a lossless
+  translation of shares, splits and owed balances; what it terminates itself is that
+  protocol's session layer. It holds whatever key such a gateway pins, so it is a trusted
+  component, offered by whoever wants to provide that on-ramp. Not part of the core.
 - **NIP-333**: coordinators publish found blocks on the chain's header stream.
   Gateways may use the stream as a block notification source beside their node.
 
@@ -583,10 +580,9 @@ Provisional. All in ranges NIP-01 reserves for ephemeral (2xxxx) and addressable
 
 ## Appendix B. Prior art
 
-- [DATUM](https://github.com/CONVOYMining/datum_gateway) and
-  [ratum](https://github.com/iohzrd/ratum): miner-built templates, pool-dictated
-  coinbase, owed blocks. datstr keeps the model, borrows the terms, and speaks
-  signed JSON north of the gateway. With thanks.
+- Ocean's [DATUM gateway](https://github.com/OCEAN-xyz/datum_gateway) and
+  [ratum](https://github.com/iohzrd/ratum): prior art for miner-built templates with a
+  pool-dictated coinbase and owed blocks. datstr shares no code or wire with either.
 - P2Pool and Braidpool: share chains and DAGs. Level 3.
 - Stratum v2 job declaration: the same goal on a different wire.
 - [bitcoin-kernel](https://bitcoin-kernel.com/): every rule a verifier applies.
