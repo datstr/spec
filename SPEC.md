@@ -1,6 +1,6 @@
 # datstr — a decentralized mining share network
 
-Status: draft 0, 13 September 2026. Nothing here is final. Field names, kinds and
+Version: 0.0.1, draft, 13 September 2026. Nothing here is final. Field names, kinds and
 document shapes are provisional until the first two gateways agree on a ledger.
 
 datstr is a protocol, not a pool. Miners build their own block templates from their

@@ -7,7 +7,7 @@ applies runs in a browser via [bitcoin-kernel](https://bitcoin-kernel.com/).
 
 DATUM semantics, signed JSON wire, Solid documents, Nostr identity.
 
-- [SPEC.md](SPEC.md): the protocol, draft 0.
+- [SPEC.md](SPEC.md): the protocol, draft version 0.0.1.
 
 Planned layout, none of it written yet:
 
