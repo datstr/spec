@@ -106,20 +106,23 @@ function bech32m(hrp, version, program) {
   return hrp + '1' + [...words, ...chk].map((w) => B32[w]).join('');
 }
 const HRP = { 'btc:testnet4-blake2b': 'tb', 'btc:testnet4': 'tb', 'btc:mainnet-blake2b': 'bc', 'btc:mainnet': 'bc', 'btc:regtest-blake2b': 'bcrt' };
-const addressFromPubkey = (hex) => { const hrp = HRP[chainId]; if (!hrp || !/^[0-9a-f]{64}$/i.test(hex)) return null; const b = new Uint8Array(32); for (let i = 0; i < 32; i++) b[i] = parseInt(hex.substr(i * 2, 2), 16); return bech32m(hrp, 1, b); };
+// BIP 341: the output key is the internal key tweaked by TapTweak(key), so the address is the one every
+// Taproot wallet derives for this key, the btcnostr tip wallet included; the tweak comes from the engine
+let tapOutputKey = null; import(`${CDN}/codec/secp256k1.js`).then((m) => { tapOutputKey = m.tapOutputKey; fillPayFromKey(); }).catch(() => {});
+const addressFromPubkey = (hex) => { const hrp = HRP[chainId]; if (!hrp || !tapOutputKey || !/^[0-9a-f]{64}$/i.test(hex)) return null; const b = new Uint8Array(32); for (let i = 0; i < 32; i++) b[i] = parseInt(hex.substr(i * 2, 2), 16); const q = tapOutputKey(b); return q ? bech32m(hrp, 1, q) : null; };
 // fill "pay to" from the login when it is empty: the coins then belong to the Nostr key itself
 let payDerived = false;
 function fillPayFromKey() {
   if (!me || $('pay').value.trim() || !chainId) return;
   const a = addressFromPubkey(me.master); if (!a) return;
   $('pay').value = a; payDerived = true; localStorage.setItem('datstr.pay', a);
-  log(`payout address derived from your Nostr key: ${a} (spendable with that key as a Taproot key-path spend; paste another address to be paid elsewhere)`);
+  log(`payout address derived from your Nostr key: ${a} (the BIP-341 Taproot address of that key, the same one a btcnostr tip wallet uses; paste another address to be paid elsewhere)`);
   showIdentity();
 }
 $('pay').addEventListener('input', () => { payDerived = false; });
 const addrLink = (a) => { const ex = EXPLORER[chainId]; return ex ? `<a href="${ex}/address/${esc(a)}" target="_blank" rel="noopener">${esc(a)}</a>` : esc(a); };
 const idline = (t, cls) => { $('idline').innerHTML = t; $('idline').className = cls ?? 'motd'; };
-const showIdentity = () => { const pay = $('pay').value.trim(); if (me) idline(`Nostr master ${esc(me.master.slice(0, 12))}… · paid to ${pay ? addrLink(pay) : '(enter an address)'}${payDerived ? ' (your key\'s own Taproot address)' : ''} · the gateway holds only a delegated worker key`, 'good'); else idline(pay ? `mining as address ${addrLink(pay)}, paid there` : `not logged in: mining as the gateway's address`); };
+const showIdentity = () => { const pay = $('pay').value.trim(); if (me) idline(`Nostr master ${esc(me.master.slice(0, 12))}… · paid to ${pay ? addrLink(pay) : '(enter an address)'}${payDerived ? ' (your key\'s Taproot address, as btcnostr derives it)' : ''} · the gateway holds only a delegated worker key`, 'good'); else idline(pay ? `mining as address ${addrLink(pay)}, paid there` : `not logged in: mining as the gateway's address`); };
 document.addEventListener('xlogin', (e) => { if (e.detail.type === 'nostr') { me = { master: e.detail.id }; log(`logged in: Nostr ${e.detail.id.slice(0, 16)}…`); fillPayFromKey(); showIdentity(); if (ws && ws.readyState === 1) identify(); } });
 document.addEventListener('xlogout', () => { if (payDerived) { $('pay').value = ''; localStorage.removeItem('datstr.pay'); payDerived = false; } });
 // xlogin restores a saved session before this module runs, so its event may already have fired: read the state too
