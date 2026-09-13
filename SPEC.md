@@ -1,7 +1,9 @@
 # datstr — a decentralized mining share network
 
-Version: 0.0.1, draft, 13 September 2026. Nothing here is final. Field names, kinds and
-document shapes are provisional until the first two gateways agree on a ledger.
+Version: 0.0.1, draft, 13 September 2026, revised the same evening from the first
+implementation: a gateway, a coordinator and two miners agreeing on a ledger on regtest, and a
+gateway mining blocks on testnet4. Nothing here is final. Field names, kinds and document
+shapes are provisional.
 
 datstr is a protocol, not a pool. Miners build their own block templates from their
 own nodes, prove their work with signed shares, and are paid directly in the coinbase
@@ -132,7 +134,8 @@ section 14 is where a cohort says what it expects of its members.
 
 The coinbase is the gateway's, built to these rules so a verifier can check it:
 
-1. Height in the scriptSig per BIP34.
+1. Height in the scriptSig per BIP34, then a 4-byte push the gateway may use as extra nonce
+   space (zero on the BLAKE2b chains, where the header carries the extranonce).
 2. Outputs in this order: the **split** outputs the current split message dictates
    (section 9), then the segwit commitment where the template requires one, then
    exactly one **datstr commitment** output, last.
@@ -167,68 +170,85 @@ The gateway's south side is stratum v1, unchanged:
 
 - SHA256d chains: `mining.subscribe`, `mining.authorize`, `mining.notify`,
   `mining.set_difficulty`, `mining.submit`, `mining.configure` for version rolling.
-- BLAKE2b chains: the Siacoin dialect the CONVOY and ratum gateways serve, with
-  8-byte `ntime` and `nonce` fields whose halves map onto the v2 header's time
-  offset and nonce fields.
+- BLAKE2b chains: the Siacoin dialect the CONVOY and ratum gateways serve. Subscribe answers
+  an 8-byte extranonce1 and extranonce2 size 8, which together fill the header's 16-byte
+  extranonce. A notify carries the 35-byte `coinb1` (three zero bytes and H2), an empty
+  `coinb2`, no merkle branches, the hidden previous block and an 8-byte ntime field. A
+  submit carries extranonce2, the ntime field and an 8-byte nonce field. The two 8-byte
+  fields are pairs of little-endian u32: nonce is (nonce, nonce2), ntime is (timeOffset,
+  nonce3).
 
-The stratum username is a lookup, not an identity. A gateway maps it to a worker
-key it holds. The conventional `<payout address>.<rig>` form still works: a gateway
-run by someone for miners who bring only an address (a public gateway) creates a
-worker per address and delegates nothing, so that miner is paid at that address and
-the gateway's own key never appears in their shares.
+The stratum username is a lookup, not an identity. A gateway maps it to a worker key it
+holds. The conventional `<payout address>.<rig>` form still works: a gateway run by someone
+for miners who bring only an address (a public gateway) creates a worker per address and
+delegates nothing, so that miner is paid at that address and the gateway's own key never
+appears in their shares.
 
-Vardiff, duplicate detection and the share target are the gateway's. The coordinator
-sets a floor (section 11, `minDifficulty`) below which it credits nothing.
+**Difficulty is per connection.** Difficulty 1 means a share is expected every 2^32 hashes,
+ratum's convention, and a difficulty's target is 2^224 divided by it, compared big-endian
+against the display-order bytes of the proof-of-work hash. Every miner starts at the
+gateway's default, then vardiff moves it so a share arrives about every `vardiffTarget`
+seconds (10 by default) within `[vardiffMin, vardiffMax]`, by at most a factor of four per
+step. A miner pins its own with `d=<n>` in the password or after a comma in the username, or
+with `mining.suggest_difficulty`. A change is delivered as `mining.set_difficulty` followed
+by the current job re-sent under a new job id, so a job id names one difficulty and a share
+is judged at the difficulty its job was sent at. The clock behind vardiff stops while the
+gateway serves no work.
+
+A gateway may serve no work while it waits: for a chain's minimum-difficulty window
+(`minBits`), above a configured `stopHeight`, or for a coordinator's split (section 9.3).
+Miners stay connected and receive the next job when work resumes.
 
 ## 8. Share
 
-A share is a Nostr event of kind 23400, signed by the worker key. Its content is
-canonical JSON with these fields:
+A share is a Nostr event of kind 23400, signed by the worker key. Its content is JSON with
+these fields:
 
 | field | type | meaning |
 |---|---|---|
 | `chain` | string | chain id, section 5 |
 | `height` | integer | the height the share mines |
 | `header` | hex | full header bytes, 80 or 164 |
-| `coinbase` | hex | full coinbase transaction |
-| `branches` | hex[] | merkle branches from the coinbase to the root, as the stratum job carried them |
-| `target` | hex | the share target the gateway checked against, 32 bytes |
+| `coinbase` | hex | full coinbase transaction, witness included |
+| `branches` | hex[] | merkle branches from the coinbase to the root, display-order txids |
+| `target` | hex | the share target the gateway judged it at, 32 bytes big-endian |
 | `split` | string | event id of the split message the coinbase follows, or `solo` |
 | `parents` | string[] | DAG parents, empty at level 1 |
 | `job` | string | gateway-local job id, informational |
+| `block` | hex | the full block, present only when the header also meets the network target |
 
-The event's tags carry `["chain", id]`, `["h", height]` and `["split", id]` so
-relays and coordinators can filter without decoding content.
+The event's tags carry `["chain", id]`, `["h", height]` and `["split", id]` so relays and
+coordinators can filter without decoding content.
 
 ### 8.1 Verification
 
-A verifier accepts a share when every step passes, in this order, and refuses it
-with the named code otherwise:
+A verifier accepts a share when every step passes, in this order, and refuses it with the
+named code otherwise:
 
-1. `sig`: NIP-01 id and BIP-340 signature verify (`verifyNostrEvent`).
-2. `delegation-expired`, `delegation-missing`: the worker has a live delegation for
-   the chain, or is its own master with a miner descriptor.
+1. `sig`: NIP-01 id and BIP-340 signature verify. `content`: the content parses.
+2. `delegation-missing`, `delegation-expired`: the worker has a miner descriptor (a worker
+   with none is its own master) or a live delegation for the chain.
 3. `chain-unknown`: the chain's kernel schema is loaded.
-4. `header-decode`: the header decodes under the chain's schema.
-5. `stale`: `height` and the header's `prevBlockHash` match a block the verifier
-   knows within the stale window (section 11, `staleDepth`).
-6. `coinbase-decode`, `coinbase-height`: the coinbase decodes and commits to
-   `height`.
-7. `merkle`: the coinbase and `branches` reproduce the header's merkle root. On the
-   BLAKE2b chains this also reproduces H2 and the `coinb1` the ASIC hashed.
-8. `commitment`: the last output is the datstr commitment for this worker and
-   `parents`.
-9. `split`: the outputs before it are exactly the split message's outputs, or the
-   share names `solo` and the coinbase pays only the worker's master, or the split
-   is stale by more than `splitGrace` seconds and the previous split matches.
-10. `pow`: the kernel's proof-of-work rule at `target` instead of the network
-    target. This is the one kernel variant this spec needs.
-11. `difficulty-floor`: `target` is at or below the coordinator's `minDifficulty`.
-12. `duplicate`: the header hash has not been credited before.
+4. `header-decode`: the header decodes under the chain's schema and commits to `height`.
+5. `stale`: `height` is at most the verifier's next height and within `staleDepth` of it,
+   and the header's previous block is the block the verifier knows at `height - 1`.
+6. `coinbase-decode`, `coinbase-height`: the coinbase decodes and its BIP34 height is `height`.
+7. `merkle`: the coinbase txid and `branches` reproduce the header's merkle root. On the
+   BLAKE2b chains this also fixes H2 and so the `coinb1` the machine hashed.
+8. `commitment`: the last output is the datstr commitment for this worker and `parents`.
+9. `split`: the outputs before it, less a witness commitment if present, are exactly the
+   named split's outputs scaled to their sum (section 9.3), for a split the verifier issued
+   for this height and still holds; or the share names `solo` and the single output pays the
+   worker's master.
+10. `pow`: the proof-of-work hash, before the XOR mask, is at or below `target`.
+11. `difficulty-floor`: `2^224 / target` is at least the pool's `minDifficulty`.
+12. `duplicate`: the block hash has not been credited before.
 
-A share whose header also meets the network target is a **block**. The gateway has
-already submitted it to its own node before signing the share. The verifier relays
-it to its own node as well, and records a block document (section 11).
+A share whose masked hash also meets the network target is a **block**. The gateway has
+already submitted it to its own node before signing the share, and the share carries the
+full block so the verifier submits it to its own node as well, then records a block document
+(section 11). A block at a height whose split the verifier holds applies that split's owed
+balances (section 9.2).
 
 ### 8.2 Weight
 
@@ -237,10 +257,11 @@ chainwork, so weights across vardiff levels are comparable and the window is a s
 
 ### 8.3 Acknowledgement
 
-A coordinator answers each share with an ack event, kind 23401, signed by its key,
-whose content is `{ share: <event id>, result: "ok" | <code>, weight: <n> }`. The
-gateway keeps every ack. A share the coordinator acked `ok` and later left out of a
-ledger snapshot is provable with the share event and the ack alone.
+A coordinator answers each share with an ack event, kind 23401, signed by its key, tagged
+`["e", <share id>]`, whose content is `{ share, result: "ok" | <code>, detail, weight, seq }`.
+`seq` is the share's position in the coordinator's credit order, which the ledger snapshots
+refer to. The gateway keeps every ack. A share the coordinator acked `ok` and later left out
+of a ledger snapshot is provable with the share event and the ack alone.
 
 ## 9. Split
 
@@ -249,10 +270,17 @@ thing DATUM's coinbaser sends: the list of outputs a coinbase must pay.
 
 ### 9.1 Window
 
-The window is the most recent credited shares on the chain whose weights sum to at
-least `windowMultiple × networkDifficulty` at the current tip, oldest dropped first.
-`windowMultiple` is in the pool descriptor. A share leaves the window by weight, not
-by time, so a miner's expected reward does not depend on when the block lands.
+The window is the most recent credited shares, in credit order, whose weights sum to at
+least `need = max(windowMultiple × D, windowMinWeight)`, oldest dropped first, where `D` is
+the network difficulty of the coordinator's current template in the same units as share
+weight. When fewer shares exist than `need`, the window is every share. A share leaves the
+window by weight, not by time, so a miner's expected reward does not depend on when the
+block lands.
+
+On a chain whose template difficulty swings between a floor and the real value, such as
+testnet4 with its twenty-minute minimum-difficulty rule, `windowMultiple × D` is
+meaningless and the descriptor sets `windowMultiple` to 0 and sizes the window with
+`windowMinWeight` alone.
 
 ### 9.2 Outputs
 
@@ -272,18 +300,32 @@ reports it), the split is computed as:
    until cleared.
 6. Rounding dust goes to the first output.
 
-Two verifiers with the same window and descriptor produce the same output list.
-That is the test in section 13.
+Owed balances change only when a block uses a split: the split's "owed after" becomes the
+pool's owed state when a block at that height is credited, not when the split is issued, so
+a split that no block used leaves nothing behind.
+
+Two verifiers with the same window and descriptor produce the same output list. That is the
+test in section 13, and `gateway/lib/split.mjs` is the function both sides call.
 
 ### 9.3 Message
 
-A split is an event of kind 23403 from the coordinator:
-`{ chain, height, outputs: [[script hex, sats]...], window: { from, to, weight },
-owed: [[master, sats]...] }`. The gateway includes it in its next job and names its
-id in every share. A split is per height, not per template: a gateway whose template
-value differs from the value the outputs sum to scales the outputs proportionally
-before building the coinbase, keeping order, and the verifier checks the scaled
-list. This is what lets every gateway keep its own transaction selection.
+A split is an event of kind 23403 from the coordinator, tagged `["chain", id]` and
+`["h", height]`, with content
+`{ chain, height, outputs: [[scriptPubKey hex, sats]...], window: { from, to, weight, need },
+owed: [[master, sats]...] }`, where `from` and `to` are the `seq` of the first and last share
+in the window. The coordinator issues one for the next height `splitDelay` seconds (0.5 by
+default) after it sees a new tip, so the share that found the block is credited first, and
+sends it to every connected gateway and to any gateway that connects later.
+
+A gateway includes the split in its next job and names its id in every share. A gateway
+that has just seen a new tip but no split for it yet waits up to `splitWait` seconds (3 by
+default) before it publishes solo work, and rebuilds its job as soon as the split arrives.
+
+A split is per height, not per template: a gateway whose template value `V` differs from
+the value the outputs sum to scales every output to `floor(value × V / sum)`, keeping order,
+and adds the rounding remainder to the first output. The verifier recomputes the same list
+from the split and the coinbase's own sum and compares byte for byte. This is what lets
+every gateway keep its own transaction selection.
 
 ### 9.4 Template value
 
@@ -309,26 +351,49 @@ detection and reputation are out of scope.
 
 ## 11. Documents
 
-Everything a coordinator knows is a document anyone can fetch. They are JSON-LD,
-served from a Solid pod under the coordinator's mount prefix, and each is also a
-signed addressable Nostr event so it can be replicated by relays. The `@context` is
-this repository's `context.jsonld`.
+Everything a coordinator knows is a document anyone can fetch. Today they are plain JSON
+served by the coordinator, each signed Nostr event carried whole; the JSON-LD context and
+the pod layout come in a later revision, and the JSON below is what the context will
+describe. Kinds 33404 and 33405 are reserved for the snapshot and block record as events.
 
-| kind | document | signed by | keyed by | holds |
-|---|---|---|---|---|
-| 33400 | pool descriptor | coordinator | chain | fee script, `feeBps`, `windowMultiple`, `minDifficulty`, `minPayout`, `maxOutputs`, `staleDepth`, `splitGrace`, `valueWeighted`, endpoints |
-| 33401 | miner descriptor | master | master | payout script per chain |
-| 33402 | delegation | master | worker | chains, expiry heights |
-| 33404 | ledger snapshot | coordinator | chain and height | the window at that height: share ids, weights, per-master sums, the split it produced, owed |
-| 33405 | block record | coordinator | chain and hash | share id, header, coinbase txid, confirmation depth or `orphaned`, whether the split was honoured |
+| path | document | holds |
+|---|---|---|
+| `/pool.json` | pool descriptor, kind 33400, signed by the coordinator | every parameter in section 9 and the endpoints |
+| `/masters.jsonl` | one line per master | pubkey, payout script, the miner descriptor event |
+| `/shares.jsonl` | one line per credited share, in credit order | `seq`, event id, master, weight, height, block hash, split id, time |
+| `/shares/<id>.json` | the share event itself | section 8 |
+| `/snapshots/<height>.json` | ledger snapshot | the split's id and outputs, `sharesUpTo` (the `seq` the window was computed from), the window's shares and weight and `need`, weight per master, the template value, owed before and after |
+| `/blocks/<hash>.json` | block record | height, hash, share id, master, coinbase txid, split id, the node's relay answer, whether it is on the chain |
+| `/stats.json` | live state | for the coordinator's page |
 
-A ledger snapshot is written at every block found and every `snapshotInterval`
-shares between blocks. The shares themselves are served under `/shares/<id>` for
-as long as the window and `staleDepth` need them, and a gateway keeps its own.
+A snapshot is written whenever a split is issued, which is at every new tip. Its
+`sharesUpTo` makes it reproducible: the first that many lines of `/shares.jsonl`, the
+descriptor and the masters file are enough to recompute the window and the split, which is
+what `audit/replay.mjs` and the audit page do.
 
-A coordinator's mount is a [JSS](https://jss.live/) plugin: `activate(api)` registers
-the WebSocket route for gateways, the document routes, and the audit page. The
-private plugin directory holds the share store. Nothing else is stateful.
+A miner descriptor, kind 33401, is tagged `["d", <master pubkey>]` and `["chain", id]` and its
+content is `{ chain, payout: { <chain id>: <scriptPubKey hex> } }`.
+
+### 11.1 Transport
+
+A gateway talks to a coordinator over one WebSocket carrying JSON messages, each with a
+`type`:
+
+| from | type | fields |
+|---|---|---|
+| gateway | `hello` | `descriptor`: the miner descriptor event; `agent`: software and version |
+| coordinator | `welcome` | `pool`: the pool descriptor event; `split`: the current split event or null |
+| coordinator | `split` | `event`: a split (section 9.3) |
+| gateway | `share` | `event`: a share (section 8) |
+| coordinator | `ack` | `event`: an ack (section 8.3) |
+| either | `error` | `error`: text |
+
+A gateway that loses the socket goes solo at once, keeps its receipts, reconnects with
+backoff, and sends `hello` again. Nothing else is stateful on the wire.
+
+A coordinator's mount is a [JSS](https://jss.live/) plugin: `activate(api)` registers the
+WebSocket route for gateways, the document routes and the pages, and the plugin directory
+holds the files above. The same core runs standalone on a plain HTTP server.
 
 ## 12. Levels
 
@@ -349,7 +414,9 @@ The share format does not change between levels. Only who verifies it does.
 
 ## 13. Acceptance test
 
-The protocol exists when this passes, on `btc:testnet4-blake2b` first:
+The protocol exists when this passes. It passes on regtest (`plugin/test/regtest.sh`, 13
+September 2026); on `btc:testnet4-blake2b` a coordinator and two gateways are live and the
+first pooled block is awaited:
 
 1. Two nodes, two gateways, two worker keys delegated from two masters, one
    coordinator, one CPU miner each.
