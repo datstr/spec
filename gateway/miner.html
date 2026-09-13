@@ -80,7 +80,7 @@ $('pay').value = q.get('pay') ?? localStorage.getItem('datstr.pay') ?? '';
 // address and a delegation to the worker key the gateway derives for it, via NIP-07 (xlogin provides window.nostr)
 let me = null; // { master } when logged in with Nostr
 const EXPLORER = { 'btc:testnet4-blake2b': 'https://mempool.guide/testnet4', 'btc:mainnet-blake2b': 'https://mempool.guide' };
-let chainId = null; fetch(new URL('stats.json', location.href), { cache: 'no-store' }).then((r) => r.json()).then((g) => { chainId = g.network; }).catch(() => {});
+let chainId = null; fetch(new URL('stats.json', location.href), { cache: 'no-store' }).then((r) => r.json()).then((g) => { chainId = g.network; showIdentity(); }).catch(() => {});
 const addrLink = (a) => { const ex = EXPLORER[chainId]; return ex ? `<a href="${ex}/address/${esc(a)}" target="_blank" rel="noopener">${esc(a)}</a>` : esc(a); };
 const idline = (t, cls) => { $('idline').innerHTML = t; $('idline').className = cls ?? 'motd'; };
 const showIdentity = () => { const pay = $('pay').value.trim(); if (me) idline(`Nostr master ${esc(me.master.slice(0, 12))}… · paid to ${pay ? addrLink(pay) : '(enter an address)'} · the gateway holds only a delegated worker key`, 'good'); else idline(pay ? `mining as address ${addrLink(pay)}, paid there` : `not logged in: mining as the gateway's address`); };
