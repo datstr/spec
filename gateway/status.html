@@ -3,78 +3,197 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>datstr gateway</title>
+<title>datstr Gateway</title>
 <style>
-  :root{--bg:#fff;--fg:#16181d;--mut:#5b6470;--bd:#e6e8eb;--pan:#fafbfc;--ac:#6d28d9;--good:#1a7f37;--bad:#cf222e;--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
-  *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
-  a{color:#0969da;text-decoration:none}a:hover{text-decoration:underline}
-  .wrap{max-width:1000px;margin:0 auto;padding:0 1.2rem 3rem}
-  nav{border-bottom:1px solid var(--bd)}nav .wrap{display:flex;align-items:center;gap:1rem;height:52px;padding-bottom:0}
-  .brand{font-weight:700;margin-right:auto;color:var(--fg)}.brand b{color:var(--ac)}
-  nav span{color:var(--mut);font:.85rem var(--mono)}
-  h1{font-size:1.5rem;margin:1.6rem 0 .2rem;letter-spacing:-.4px}
-  .sub{color:var(--mut);margin:0 0 1.2rem;font-size:.92rem}
-  .hold{margin:.6rem 0 1rem;padding:.6rem .9rem;border:1px solid #f1d38a;background:#fff8e6;border-radius:8px;font-size:.9rem}
-  .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:.8rem}
-  .tile{border:1px solid var(--bd);border-radius:12px;padding:.8rem 1rem;background:var(--pan)}
-  .tile .k{font:700 .68rem var(--mono);letter-spacing:1.5px;text-transform:uppercase;color:var(--mut)}
-  .tile .v{font:700 1.5rem var(--mono);letter-spacing:-.5px;margin-top:.15rem}.tile .v.good{color:var(--good)}
-  h2{font-size:1.05rem;margin:1.8rem 0 .5rem}
-  table{border-collapse:collapse;width:100%;font-size:.86rem}
-  th,td{border-top:1px solid var(--bd);padding:.45rem .6rem;text-align:left;vertical-align:top}
-  th{color:var(--mut);font-weight:600;font-size:.74rem;text-transform:uppercase;letter-spacing:1px;border-top:none}
-  td.m,span.m{font-family:var(--mono);font-size:.82rem}
-  .ok{color:var(--good);font-weight:700}.no{color:var(--bad);font-weight:700}
-  .empty{color:var(--mut);padding:.6rem 0}
-  .wrapx{overflow-x:auto}
+  :root { --bg:#0f1115; --card:#181b22; --line:#262b34; --fg:#e6e8ec; --muted:#9aa3b2; --accent:#6ea8fe; --good:#4ade80; --warn:#f0a04b; --bad:#f87171; }
+  * { box-sizing:border-box }
+  html { scrollbar-color:var(--line) var(--bg) }
+  body { margin:0; padding:1.5rem; background:var(--bg); color:var(--fg); font:14px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace }
+  a { color:var(--accent) }
+  h1 { font-size:1.25rem; margin:0 }
+  h2 { font-size:1rem; color:var(--muted); margin:0 0 .6rem }
+  header { display:flex; justify-content:space-between; align-items:baseline; flex-wrap:wrap; gap:.5rem; border-bottom:1px solid var(--line); padding-bottom:.75rem; margin-bottom:1rem }
+  .motd { color:var(--muted) } .right { text-align:right } .nav a { margin-left:.75rem }
+  .chain { margin-left:.5rem; padding:.1rem .5rem; border-radius:.25rem; font-size:.8rem; font-weight:normal; vertical-align:middle; color:var(--warn); border:1px solid var(--warn) }
+  .chain.good { color:var(--good); border-color:var(--good) } .chain.bad { color:var(--bad); border-color:var(--bad) }
+  .stale { color:var(--warn) } .good { color:var(--good) } .bad { color:var(--bad) }
+  .banner { border:1px solid var(--warn); background:rgba(240,160,75,.08); border-radius:8px; padding:.6rem .8rem; margin-bottom:.75rem }
+  .hero { display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:.75rem; margin-bottom:.75rem }
+  .tile, .panel, .chart-card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:.8rem .9rem }
+  .panel { margin-bottom:.75rem } .chart-card { margin-bottom:1.25rem }
+  .label { color:var(--muted); font-size:.8rem; text-transform:uppercase; letter-spacing:.04em }
+  .tile .big { font-size:1.5rem; line-height:1.25; margin-top:.2rem; font-variant-numeric:tabular-nums; word-break:break-word }
+  .tile .sub { color:var(--muted); font-size:.8rem; margin-top:.15rem }
+  .chart-head { display:flex; justify-content:space-between; align-items:baseline; gap:.5rem; flex-wrap:wrap; margin-bottom:.4rem }
+  .chart { position:relative; height:150px }
+  .chart svg { position:absolute; inset:0; width:100%; height:100%; display:block }
+  .chart .empty { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:var(--muted); font-size:.85rem }
+  .chart-tip { position:absolute; display:none; pointer-events:none; z-index:2; background:var(--bg); border:1px solid var(--line); border-radius:6px; padding:.25rem .5rem; font-size:.8rem; white-space:nowrap; transform:translate(-50%,-100%) }
+  .meter { position:relative; height:.6rem; background:var(--bg); border:1px solid var(--line); border-radius:999px; overflow:hidden }
+  .meter > span { position:absolute; inset:0; width:0; background:var(--accent); opacity:.55; border-radius:999px; transition:width .4s }
+  .meter-row { display:flex; justify-content:space-between; align-items:baseline; gap:.5rem; flex-wrap:wrap; margin-bottom:.35rem }
+  .meter-row .val { font-variant-numeric:tabular-nums }
+  .chips { display:flex; flex-wrap:wrap; gap:.4rem .5rem; margin-top:.7rem }
+  .chip { border:1px solid var(--line); border-radius:999px; padding:.15rem .6rem; font-size:.8rem; color:var(--muted) }
+  .chip b { color:var(--fg); font-weight:600; font-variant-numeric:tabular-nums }
+  section { margin:1.5rem 0 }
+  table { width:100%; border-collapse:collapse }
+  th, td { text-align:left; padding:.45rem .6rem; border-bottom:1px solid var(--line); vertical-align:top }
+  th { color:var(--muted); font-weight:600; font-size:.8rem; text-transform:uppercase }
+  td.num, th.num { text-align:right; font-variant-numeric:tabular-nums } td.mono { word-break:break-all }
+  #clients td.num, #clients td:last-child { white-space:nowrap }
+  .tag { margin-left:.5rem; padding:.05rem .4rem; border-radius:.25rem; font-size:.75rem; color:var(--warn); border:1px solid var(--warn); white-space:nowrap }
+  .bar { position:relative } .bar > span { position:absolute; inset:0; background:rgba(110,168,254,.16); border-radius:3px } .bar > em { position:relative; font-style:normal }
+  footer { color:var(--muted); margin-top:1rem; font-size:.8rem }
 </style>
 </head>
 <body>
-<nav><div class="wrap"><a class="brand" href="https://datstr.com/">dat<b>·</b>str</a><span id="net">…</span><span id="clock"></span></div></nav>
-<div class="wrap">
-  <h1>gateway</h1>
-  <p class="sub" id="sub">connecting…</p>
-  <div id="hold" class="hold" hidden></div>
-  <div class="tiles">
-    <div class="tile"><div class="k">blocks</div><div class="v good" id="t-blocks">–</div></div>
-    <div class="tile"><div class="k">shares</div><div class="v" id="t-shares">–</div></div>
-    <div class="tile"><div class="k">rejected</div><div class="v" id="t-rejected">–</div></div>
-    <div class="tile"><div class="k">hashrate 10 min</div><div class="v" id="t-hash">–</div></div>
-    <div class="tile"><div class="k">miners</div><div class="v" id="t-clients">–</div></div>
-    <div class="tile"><div class="k">uptime</div><div class="v" id="t-up">–</div></div>
+<header>
+  <div>
+    <h1>datstr Gateway<span class="chain" id="status"></span></h1>
+    <div class="motd" id="pool"></div>
   </div>
-  <h2>current job</h2>
-  <div class="wrapx"><table><tr><th>height</th><th>prev</th><th>bits</th><th>txs</th><th>value</th><th>age</th><th>commitment</th></tr><tbody id="job"></tbody></table></div>
-  <h2>blocks found</h2>
-  <div class="wrapx"><table><tr><th>height</th><th>hash</th><th>time</th><th>miner</th><th>value</th><th>txs</th><th>node</th></tr><tbody id="blocks"></tbody></table></div>
-  <h2>miners</h2>
-  <div class="wrapx"><table><tr><th>remote</th><th>agent</th><th>user</th><th>shares</th><th>rejected</th><th>last share</th><th>connected</th></tr><tbody id="clients"></tbody></table></div>
-  <p class="sub" style="margin-top:1.6rem">Data: <a id="api" href="stats.json">stats.json</a>, refreshed every 5 s. The datstr <a href="https://datstr.com/spec/">spec</a>.</p>
+  <div class="motd right">
+    <div id="updated">connecting...</div>
+    <div id="version"></div>
+    <div class="nav"><a href="stats.json">stats.json</a><a href="https://datstr.com/spec/" target="_blank" rel="noopener">Spec</a></div>
+  </div>
+</header>
+
+<div class="banner" id="banner" style="display:none"></div>
+<div class="hero" id="hero"></div>
+
+<div class="chart-card">
+  <div class="chart-head"><span class="label">Gateway hashrate</span><span class="motd" id="chart-note"></span></div>
+  <div class="chart" id="chart"><svg aria-label="gateway hashrate history"></svg><div class="empty">collecting samples; the gateway records one per minute</div><div class="chart-tip"></div></div>
 </div>
+
+<section>
+  <h2>Current job</h2>
+  <div class="panel">
+    <div class="meter-row"><span class="label">Block weight</span><span class="val" id="weight-vals"></span></div>
+    <div class="meter"><span id="weight-fill"></span></div>
+    <div class="meter-row" style="margin-top:.7rem"><span class="label">Job age</span><span class="val" id="age-vals"></span></div>
+    <div class="meter"><span id="age-fill"></span></div>
+    <div class="chips" id="job-chips"></div>
+  </div>
+</section>
+
+<section>
+  <h2>Miners</h2>
+  <div style="overflow-x:auto"><table id="clients">
+    <thead><tr><th>Remote</th><th>Username</th><th class="num">Hashrate</th><th class="num">Difficulty</th><th class="num">Accepted</th><th class="num">Rejected</th><th class="num">Last share</th><th class="num">Connected</th><th>User agent</th></tr></thead>
+    <tbody></tbody>
+  </table></div>
+</section>
+
+<section>
+  <h2>Coinbase outputs</h2>
+  <div style="overflow-x:auto"><table id="coinbaser">
+    <thead><tr><th class="num">Value</th><th class="num">Share</th><th>Address</th></tr></thead>
+    <tbody></tbody>
+  </table></div>
+</section>
+
+<section>
+  <h2>Blocks found</h2>
+  <div style="overflow-x:auto"><table id="blocks">
+    <thead><tr><th class="num">Height</th><th>Hash</th><th>Time</th><th>Miner</th><th class="num">Value</th><th class="num">Txns</th><th>Node</th></tr></thead>
+    <tbody></tbody>
+  </table></div>
+</section>
+
+<footer>Refreshes every 5 s.
+  <div style="margin-top:.5rem">A <a href="https://datstr.com/" target="_blank" rel="noopener">datstr</a> gateway for the Bitcoin Knots BLAKE2b hardfork chain, in the layout of
+    <a href="https://github.com/iohzrd/ratum" target="_blank" rel="noopener">iohzrd/ratum</a>'s.
+  </div>
+</footer>
+
 <script>
 const q = new URLSearchParams(location.search);
 const API = q.get('api') ? q.get('api').replace(/\/$/, '') + '/stats.json' : 'stats.json';
-document.getElementById('api').href = API;
 const $ = (id) => document.getElementById(id);
-const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-const btc = (sats) => (sats / 1e8).toFixed(8).replace(/0+$/, '').replace(/\.$/, '');
-const dur = (s) => s < 60 ? s + 's' : s < 3600 ? Math.floor(s / 60) + 'm ' + (s % 60) + 's' : s < 86400 ? Math.floor(s / 3600) + 'h ' + Math.floor(s % 3600 / 60) + 'm' : Math.floor(s / 86400) + 'd ' + Math.floor(s % 86400 / 3600) + 'h';
-const ago = (t) => t ? dur(Math.max(0, Math.floor((Date.now() - t) / 1000))) + ' ago' : '–';
-const hr = (h) => h >= 1e12 ? (h / 1e12).toFixed(2) + ' TH/s' : h >= 1e9 ? (h / 1e9).toFixed(2) + ' GH/s' : h >= 1e6 ? (h / 1e6).toFixed(1) + ' MH/s' : h >= 1e3 ? (h / 1e3).toFixed(0) + ' kH/s' : Math.round(h) + ' H/s';
+const num = (n) => n == null ? '-' : Number(n).toLocaleString();
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const btc = (sats) => sats == null ? '-' : (sats / 1e8).toLocaleString(undefined, { minimumFractionDigits: 8, maximumFractionDigits: 8 }) + ' BTC';
+const pct = (part, whole) => whole > 0 ? (part / whole * 100).toFixed(1) + '%' : '-';
+function hashrate(hs) { if (hs == null) return '-'; const u = ['H/s', 'kH/s', 'MH/s', 'GH/s', 'TH/s', 'PH/s', 'EH/s']; let i = 0; while (hs >= 1000 && i < u.length - 1) { hs /= 1000; i++; } return hs.toLocaleString(undefined, { maximumFractionDigits: hs < 10 ? 2 : 1 }) + ' ' + u[i]; }
+function duration(s) { if (s == null || !isFinite(s) || s <= 0) return '-'; if (s < 90) return Math.round(s) + ' s'; if (s < 5400) return Math.round(s / 60) + ' min'; if (s < 172800) return (s / 3600).toFixed(1) + ' h'; return (s / 86400).toFixed(1) + ' d'; }
+const ago = (s) => s == null || s < 0 ? '-' : duration(Math.max(s, 1)) + ' ago';
+const tile = (label, big, sub) => `<div class="tile"><div class="label">${label}</div><div class="big">${big}</div>${sub ? `<div class="sub">${sub}</div>` : ''}</div>`;
+const chip = (label, value) => `<span class="chip">${label} <b>${value}</b></span>`;
+const tally = (count, diff) => `${num(count)} <span class="motd">(${num(diff)})</span>`;
+const barCell = (text, part, whole) => `<td class="num bar"><span style="width:${whole > 0 ? Math.min(part / whole * 100, 100) : 0}%"></span><em>${text}</em></td>`;
+function meter(fillId, valsId, fraction, text) { const f = isFinite(fraction) ? Math.min(Math.max(fraction, 0), 1) : 0; $(fillId).style.width = (f * 100) + '%'; $(valsId).textContent = text; }
 const EXPLORER = { 'btc:testnet4-blake2b': 'https://mempool.guide/testnet4', 'btc:mainnet-blake2b': 'https://mempool.guide' };
-async function tick() {
-  let s; try { s = await (await fetch(API, { cache: 'no-store' })).json(); } catch { $('sub').textContent = 'gateway not reachable at ' + API; return; }
+
+// The hashrate chart: samples are [unix, H/s] pairs one `interval` apart; a longer gap breaks the line.
+function drawChart(root, samples, interval) {
+  root._data = [samples, interval]; root._pts = [];
+  const svg = root.querySelector('svg'), empty = root.querySelector('.empty');
+  if (samples.length < 2) { svg.innerHTML = ''; empty.style.display = 'flex'; return ''; }
+  empty.style.display = 'none';
+  const w = root.clientWidth, h = root.clientHeight, padT = 14, padB = 16, padL = 2, padR = 2;
+  const t0 = samples[0][0], t1 = samples[samples.length - 1][0], span = Math.max(t1 - t0, 1);
+  const max = Math.max(...samples.map((p) => p[1]), 1e-9) * 1.05;
+  const x = (t) => padL + (t - t0) / span * (w - padL - padR), y = (v) => padT + (1 - v / max) * (h - padT - padB);
+  const base = y(0); let line = '', area = '', seg = [];
+  const flush = () => { if (seg.length >= 2) { const d = seg.map((p, i) => (i ? 'L' : 'M') + p[0].toFixed(1) + ' ' + p[1].toFixed(1)).join(' '); line += d + ' '; area += d + ` L${seg[seg.length - 1][0].toFixed(1)} ${base.toFixed(1)} L${seg[0][0].toFixed(1)} ${base.toFixed(1)} Z `; } seg = []; };
+  samples.forEach((p, i) => { if (i > 0 && p[0] - samples[i - 1][0] > interval * 2.5) flush(); const px = x(p[0]), py = y(p[1]); seg.push([px, py]); root._pts.push([px, py, p[0], p[1]]); });
+  flush();
+  const grid = [max / 2, max].map((v) => `<line x1="0" y1="${y(v).toFixed(1)}" x2="${w}" y2="${y(v).toFixed(1)}" stroke="var(--line)"/><text x="4" y="${(y(v) - 3).toFixed(1)}" fill="var(--muted)" font-size="10">${hashrate(v)}</text>`).join('');
+  const last = root._pts[root._pts.length - 1];
+  svg.innerHTML = grid + `<path d="${area}" fill="var(--accent)" opacity=".12"/><path d="${line}" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/><circle cx="${last[0].toFixed(1)}" cy="${last[1].toFixed(1)}" r="3" fill="var(--accent)"/>`
+    + `<text x="${padL}" y="${h - 3}" fill="var(--muted)" font-size="10">${new Date(t0 * 1000).toLocaleTimeString()}</text><text x="${w - padR}" y="${h - 3}" text-anchor="end" fill="var(--muted)" font-size="10">${new Date(t1 * 1000).toLocaleTimeString()}</text>`
+    + `<line class="crosshair" y1="${padT}" y2="${h - padB}" stroke="var(--muted)" stroke-dasharray="3 3" visibility="hidden"/>`;
+  return `${samples.length} samples over ${duration(span)}`;
+}
+(function () {
+  const root = $('chart'), tip = root.querySelector('.chart-tip');
+  root.addEventListener('mousemove', (e) => { const cross = root.querySelector('.crosshair'), pts = root._pts || []; if (!pts.length || !cross) return; const mx = e.clientX - root.getBoundingClientRect().left; let best = pts[0]; for (const p of pts) if (Math.abs(p[0] - mx) < Math.abs(best[0] - mx)) best = p; cross.setAttribute('x1', best[0]); cross.setAttribute('x2', best[0]); cross.setAttribute('visibility', 'visible'); tip.style.display = 'block'; tip.style.left = Math.min(Math.max(best[0], 60), root.clientWidth - 60) + 'px'; tip.style.top = (best[1] - 8) + 'px'; tip.textContent = `${new Date(best[2] * 1000).toLocaleTimeString()} · ~${hashrate(best[3])}`; });
+  root.addEventListener('mouseleave', () => { const cross = root.querySelector('.crosshair'); if (cross) cross.setAttribute('visibility', 'hidden'); tip.style.display = 'none'; });
+  addEventListener('resize', () => { if (root._data) drawChart(root, root._data[0], root._data[1]); });
+})();
+
+function render(s) {
   const ex = EXPLORER[s.network];
   const link = (kind, id, text) => ex ? `<a href="${ex}/${kind}/${id}" target="_blank" rel="noopener">${text}</a>` : text;
-  $('net').textContent = s.network; $('clock').textContent = new Date().toISOString().slice(11, 19) + ' UTC';
-  $('sub').innerHTML = `stratum diff ${s.difficulty} · paying <span class="m">${s.pay.map(esc).join(', ')}</span> · node <span class="m">${esc(s.node)}</span>${s.stopHeight ? ` · stop at height ${s.stopHeight}` : ''}${s.minBits ? ` · min-difficulty windows only (${s.minBits})` : ''}`;
-  $('hold').hidden = !s.holding; $('hold').textContent = s.holding ? 'holding: ' + s.holding : '';
-  $('t-blocks').textContent = s.stats.blocks; $('t-shares').textContent = s.stats.shares; $('t-rejected').textContent = s.stats.rejected;
-  $('t-hash').textContent = hr(s.hashrate); $('t-clients').textContent = s.clients.length; $('t-up').textContent = dur(s.uptime);
-  $('job').innerHTML = s.job ? `<tr><td class="m">${s.job.height}</td><td class="m">${link('block', s.job.prev, s.job.prev.slice(0, 20) + '…')}</td><td class="m">${s.job.bits}</td><td class="m">${s.job.txs}</td><td class="m">${btc(s.job.value)}</td><td class="m">${dur(s.job.age)}</td><td class="m">${s.job.commitment.slice(0, 16)}…</td></tr>` : '<tr><td colspan="7" class="empty">no job</td></tr>';
-  $('blocks').innerHTML = s.blocks.length ? s.blocks.map((b) => `<tr><td class="m">${b.height}</td><td class="m">${link('block', b.hash, b.hash.slice(0, 24) + '…')}</td><td class="m">${new Date(b.time * 1000).toISOString().slice(0, 19).replace('T', ' ')}</td><td class="m">${esc(b.user)}</td><td class="m">${btc(b.value)}</td><td class="m">${b.txs}</td><td>${b.accepted ? '<span class="ok">accepted</span>' : '<span class="no">' + esc(b.result) + '</span>'}</td></tr>`).join('') : '<tr><td colspan="7" class="empty">none yet</td></tr>';
-  $('clients').innerHTML = s.clients.length ? s.clients.map((c) => `<tr><td class="m">${esc(c.remote)}</td><td class="m">${esc(c.agent)}</td><td class="m">${esc(c.user)}</td><td class="m">${c.shares}</td><td class="m">${c.rejected}</td><td class="m">${ago(c.lastShare)}</td><td class="m">${ago(c.since)}</td></tr>`).join('') : '<tr><td colspan="7" class="empty">no miner connected</td></tr>';
+  const st = $('status');
+  st.textContent = s.status; st.className = 'chain ' + (s.status === 'Serving work' ? 'good' : s.status === 'Holding' ? 'stale' : 'bad');
+  $('pool').innerHTML = `${esc(s.network)} · node ${esc(s.node)} · no coordinator yet: every block pays ${s.pay.length === 1 ? 'the address given' : s.pay.length + ' addresses'}${s.stop_height ? ` · stops at height ${num(s.stop_height)}` : ''}${s.min_bits ? ` · min-difficulty windows only (${esc(s.min_bits)})` : ''}`;
+  $('version').textContent = s.version || '';
+  const notes = [];
+  if (s.holding) notes.push('Holding: ' + esc(s.holding));
+  for (const w of s.node_warnings || []) notes.push('The node reports: ' + esc(w));
+  $('banner').style.display = notes.length ? '' : 'none'; $('banner').innerHTML = notes.join('<br>');
+  const j = s.job || {}, acc = s.shares_accepted, rej = s.shares_rejected, rate = s.stratum.hashrate;
+  $('hero').innerHTML = [
+    tile('Hashrate', rate > 0 ? '~' + hashrate(rate) : '-', `${num(s.stratum.subscriptions)} subscribed of ${num(s.stratum.connections)} connections`),
+    tile('Shares accepted', num(acc.count), `${num(acc.diff)} difficulty · ${num(rej.count)} rejected (${pct(rej.count, acc.count + rej.count)})`),
+    tile('Block height', s.job ? num(j.height) : '-', s.job ? `${btc(j.value_sats)} · ${num(j.txn_count)} transactions` : 'no job yet'),
+    tile('Blocks found', num(s.blocks_found), s.blocks.length ? `last ${ago(Math.floor(Date.now() / 1000) - s.blocks[0].time)}` : 'none yet'),
+    tile('Uptime', duration(s.uptime_seconds), `stratum difficulty ${num(s.difficulty)}`),
+  ].join('');
+  $('chart-note').textContent = drawChart($('chart'), (s.hashrate && s.hashrate.history) || [], (s.hashrate && s.hashrate.interval_seconds) || 60);
+  if (s.job) {
+    meter('weight-fill', 'weight-vals', j.txn_total_weight / j.weightlimit, `${num(j.txn_total_weight)} / ${num(j.weightlimit)} (${pct(j.txn_total_weight, j.weightlimit)})`);
+    meter('age-fill', 'age-vals', j.created_seconds_ago / s.work_update_seconds, `${duration(Math.max(j.created_seconds_ago, 1))} of ${duration(s.work_update_seconds)} between refreshes · template polled every ${duration(s.poll_seconds)}`);
+    $('job-chips').innerHTML = [chip('job', esc(j.job_id)), chip('payout', esc(j.payout)), chip('difficulty', num(j.difficulty)), chip('bits', esc(j.bits)), chip('coinbase outputs', num(j.coinbase_outputs)),
+      `<span class="chip" title="${esc(j.previous_block)}">previous block <b>…${esc(String(j.previous_block).slice(-12))}</b></span>`, `<span class="chip" title="${esc(j.commitment)}">datstr commitment <b>${esc(String(j.commitment).slice(0, 12))}…</b></span>`].join('');
+  } else { meter('weight-fill', 'weight-vals', 0, 'no job'); meter('age-fill', 'age-vals', 0, '-'); $('job-chips').innerHTML = ''; }
+  const maxRate = Math.max(...s.clients.map((c) => c.hashrate || 0), 0);
+  document.querySelector('#clients tbody').innerHTML = s.clients.length ? s.clients.map((c) => `<tr>
+    <td>${esc(c.remote)}</td><td class="mono">${esc(c.username)}${!c.subscribed ? '<span class="tag">not subscribed</span>' : ''}</td>
+    ${c.hashrate > 0 ? barCell('~' + hashrate(c.hashrate), c.hashrate, maxRate) : '<td class="num">-</td>'}
+    <td class="num">${num(c.difficulty)}</td><td class="num">${tally(c.accepted_count, c.accepted_diff)}</td><td class="num">${tally(c.rejected_count, c.rejected_diff)}</td>
+    <td class="num">${ago(c.last_accepted_seconds)}</td><td class="num">${duration(Math.max(c.connected_seconds, 1))}</td><td class="mono">${esc(c.useragent)}</td></tr>`).join('')
+    : '<tr><td colspan="9" class="motd">no miners connected</td></tr>';
+  const outs = s.coinbaser || [], total = outs.reduce((a, o) => a + o.value_sats, 0);
+  document.querySelector('#coinbaser tbody').innerHTML = outs.length ? outs.map((o) => `<tr><td class="num">${btc(o.value_sats)}</td>${barCell(pct(o.value_sats, total), o.value_sats, total)}<td class="mono">${esc(o.address)}${o.remainder ? '<span class="tag">remainder</span>' : ''}</td></tr>`).join('') : '<tr><td colspan="3" class="motd">no job yet</td></tr>';
+  document.querySelector('#blocks tbody').innerHTML = s.blocks.length ? s.blocks.map((b) => `<tr><td class="num">${num(b.height)}</td><td class="mono">${link('block', b.hash, esc(b.hash))}</td><td>${new Date(b.time * 1000).toLocaleString()}</td><td class="mono">${esc(b.user)}</td><td class="num">${btc(b.value)}</td><td class="num">${num(b.txs)}</td><td>${b.accepted ? '<span class="good">accepted</span>' : '<span class="bad">' + esc(b.result) + '</span>'}</td></tr>`).join('') : '<tr><td colspan="7" class="motd">none yet</td></tr>';
+  $('updated').textContent = 'updated ' + new Date().toLocaleTimeString();
 }
+async function tick() { let s; try { s = await (await fetch(API, { cache: 'no-store' })).json(); } catch { $('updated').innerHTML = '<span class="stale">unreachable</span>'; return; } render(s); }
 tick(); setInterval(tick, 5000);
 </script>
 </body>

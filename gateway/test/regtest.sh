@@ -63,8 +63,12 @@ while [ $SECONDS -lt $deadline ]; do h=$(cli getblockcount 2>/dev/null || echo 0
 [ "$h" -ge "$TARGET" ] || { tail -20 "$WORK/gateway.log" "$WORK/miner.log"; fail "no block at $TARGET within ${TIMEOUT}s"; }
 
 step "status page"
-curl -sf "http://127.0.0.1:$API_PORT/" | grep -q '<title>datstr gateway' || fail "status page not served"
-curl -sf "http://127.0.0.1:$API_PORT/stats.json" | python3 -c "import json,sys; s=json.load(sys.stdin); print('  stats.json: blocks', s['stats']['blocks'], 'shares', s['stats']['shares'], 'clients', len(s['clients']), 'hashrate %.0f MH/s' % (s['hashrate']/1e6))"
+curl -sf "http://127.0.0.1:$API_PORT/" | grep -qi '<title>datstr gateway' || fail "status page not served"
+curl -sf "http://127.0.0.1:$API_PORT/stats.json" | python3 -c "import json,sys; s=json.load(sys.stdin); print('  stats.json: blocks', s['blocks_found'], 'shares', s['shares_accepted']['count'], 'clients', len(s['clients']), 'hashrate %.0f MH/s' % (s['stratum']['hashrate']/1e6))"
+
+if [ -n "${SCREENSHOT:-}" ]; then
+  sleep 6; timeout 60 chromium-browser --headless=new --disable-gpu --hide-scrollbars --no-sandbox --window-size=1200,1250 --screenshot="$SCREENSHOT" "http://127.0.0.1:$API_PORT/" >/dev/null 2>&1 && echo "  screenshot $SCREENSHOT"
+fi
 
 step "checking block $TARGET"
 HASH=$(cli getblockhash "$TARGET")

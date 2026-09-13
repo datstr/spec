@@ -22,6 +22,8 @@ import { loadEngine } from './lib/engine.mjs';
 import { buildBlock } from './lib/block.mjs';
 import { targetForDifficulty, meets } from './lib/target.mjs';
 import { StratumServer } from './stratum.mjs';
+import { scriptToAddress } from './lib/address.mjs';
+import { execSync } from 'node:child_process';
 
 const args = Object.fromEntries(process.argv.slice(2).map((a, i, all) => a.startsWith('--') ? [a.slice(2), all[i + 1] === undefined || all[i + 1].startsWith('--') ? true : all[i + 1]] : []).filter(Boolean));
 const NETWORK = args.network ?? 'btc:testnet4-blake2b';
@@ -41,10 +43,15 @@ const shareTarget = targetForDifficulty(DIFF);
 let jobSeq = 0, current = null, seen = new Set();
 const stats = { shares: 0, rejected: 0, blocks: 0 };
 const started = Date.now();
+let VERSION = 'datstr-gateway/0.0.1';
+try { VERSION += '/' + execSync('git rev-parse --short HEAD', { cwd: fileURLToPath(new URL('.', import.meta.url)), stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim(); } catch {}
+const history = []; // [unix seconds, hashes per second], one sample a minute, a day kept
+let nodeWarnings = [];
 const blocks = []; // found blocks, newest first
 const recent = []; // [time, difficulty] of accepted shares, for the hashrate estimate
 const clientStats = new WeakMap();
-const cstat = (c) => { let x = clientStats.get(c); if (!x) { x = { shares: 0, rejected: 0, lastShare: null, since: Date.now() }; clientStats.set(c, x); } return x; };
+const cstat = (c) => { let x = clientStats.get(c); if (!x) { x = { shares: 0, rejected: 0, lastShare: null, since: Date.now(), recent: [] }; clientStats.set(c, x); } return x; };
+const rateOf = (samples, now) => { const cut = now - 600000; while (samples.length && samples[0][0] < cut) samples.shift(); const from = Math.max(cut, started); return samples.reduce((a, [, d]) => a + d * 4294967296, 0) / Math.max(1, (now - from) / 1000); };
 
 function makeJob(t) {
   const b = buildBlock({ k, hash, template: t, payScripts, worker: args.worker });
@@ -65,7 +72,7 @@ const stratum = new StratumServer({ difficulty: DIFF, log, onShare: async ({ job
   if (!meets(powBytes, shareTarget)) { stats.rejected++; cs.rejected++; return { ok: false, code: 23, reason: 'low difficulty' }; }
   if (seen.has(d.blockHash)) { stats.rejected++; cs.rejected++; return { ok: false, code: 22, reason: 'duplicate' }; }
   seen.add(d.blockHash);
-  stats.shares++; cs.shares++; cs.lastShare = Date.now(); recent.push([Date.now(), DIFF]);
+  stats.shares++; cs.shares++; cs.lastShare = Date.now(); recent.push([Date.now(), DIFF]); cs.recent.push([Date.now(), DIFF]);
   const isBlock = meets(hashBytes, job.networkTarget);
   const stale = job.prev !== current?.prev;
   log(`share ${d.blockHash.slice(0, 20)}… job ${job.id} h${job.height} ${user}${isBlock ? ' BLOCK' : ''}${stale ? ' (stale job)' : ''}`);
@@ -101,18 +108,34 @@ async function refresh(force) {
 }
 
 function snapshot() {
-  const now = Date.now(), cut = now - 600000;
-  while (recent.length && recent[0][0] < cut) recent.shift();
-  const window = Math.max(1, (now - Math.max(cut, started)) / 1000); // the last ten minutes, or since start
-  const hashrate = recent.reduce((a, [, d]) => a + d * 4294967296, 0) / window;
+  const now = Date.now();
+  const hashrate = rateOf(recent, now);
+  const j = current;
+  const weight = j ? k.blocks.blockWeight({ header: j.block.header, transactions: j.block.transactions }) : 0;
+  const status = holding ? 'Holding' : j ? 'Serving work' : 'No job';
   return {
-    network: NETWORK, node: rpc.url, uptime: Math.floor((now - started) / 1000), difficulty: DIFF, stopHeight: STOP < Infinity ? STOP : null, minBits: MIN_BITS,
-    pay: payAddrs, holding, hashrate, stats,
-    job: current && { id: current.id, height: current.height, prev: current.prev, bits: current.bits, txs: current.template.transactions.length, value: current.template.coinbasevalue, age: Math.floor((now - current.made) / 1000), commitment: current.block.commitment },
-    clients: [...stratum.clients].map((c) => ({ remote: c.remote, agent: c.agent ?? null, user: c.user, subscribed: c.subscribed, ...cstat(c) })),
+    version: VERSION, network: NETWORK, node: rpc.url, uptime_seconds: Math.floor((now - started) / 1000), status, holding,
+    difficulty: DIFF, stop_height: STOP < Infinity ? STOP : null, min_bits: MIN_BITS, pay: payAddrs,
+    work_update_seconds: REFRESH / 1000, poll_seconds: POLL / 1000, node_warnings: nodeWarnings,
+    stratum: { listening: true, connections: stratum.clients.size, subscriptions: [...stratum.clients].filter((c) => c.subscribed).length, hashrate },
+    shares_accepted: { count: stats.shares, diff: stats.shares * DIFF }, shares_rejected: { count: stats.rejected, diff: stats.rejected * DIFF }, blocks_found: stats.blocks,
+    hashrate: { history, interval_seconds: 60 },
+    job: j && {
+      job_id: j.id, height: j.height, previous_block: j.prev, bits: j.bits, txn_count: j.template.transactions.length, value_sats: j.template.coinbasevalue,
+      txn_total_weight: weight, weightlimit: j.template.weightlimit, created_seconds_ago: Math.floor((now - j.made) / 1000), difficulty: DIFF,
+      coinbase_outputs: j.block.nSplit, payout: 'addresses', commitment: j.block.commitment,
+    },
+    coinbaser: j ? j.block.coinbase.outputs.slice(0, j.block.nSplit).map((o, i) => ({ value_sats: o.value, address: scriptToAddress(o.scriptPubKey, k.params.bech32Hrp) ?? o.scriptPubKey, remainder: i === 0 && j.block.nSplit > 1 })) : [],
+    clients: [...stratum.clients].map((c) => { const cs = cstat(c); return {
+      remote: c.remote, username: c.user, useragent: c.agent ?? '', subscribed: c.subscribed, difficulty: DIFF, hashrate: rateOf(cs.recent, now),
+      accepted_count: cs.shares, accepted_diff: cs.shares * DIFF, rejected_count: cs.rejected, rejected_diff: cs.rejected * DIFF,
+      last_accepted_seconds: cs.lastShare ? Math.floor((now - cs.lastShare) / 1000) : null, connected_seconds: Math.floor((now - cs.since) / 1000),
+    }; }),
     blocks,
   };
 }
+setInterval(() => { history.push([Math.floor(Date.now() / 1000), rateOf(recent, Date.now())]); if (history.length > 1440) history.shift(); }, 60000);
+setInterval(async () => { try { const m = await rpc('getmininginfo'); nodeWarnings = Array.isArray(m.warnings) ? m.warnings : m.warnings ? [m.warnings] : []; } catch (e) { nodeWarnings = [`node unreachable: ${e.message}`]; } }, 60000);
 if (args.api !== 'false') {
   const page = await readFile(new URL('./status.html', import.meta.url), 'utf8');
   const apiPort = Number(args.api ?? 3334);
