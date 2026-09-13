@@ -152,7 +152,7 @@ const stratum = new StratumServer({ difficulty: DIFF, vardiff: VARDIFF, log, onS
 
 let holding = null; // why no work is being served, logged once per reason
 let awaiting = null; const SPLIT_WAIT = Number(args['split-wait'] ?? 3) * 1000;
-function hold(reason) { if (holding !== reason) { holding = reason; log(`holding: ${reason}`); } }
+function hold(reason) { if (holding !== reason) { holding = reason; log(`holding: ${reason}`); } stratum.pause(true); }
 
 async function refresh(force) {
   let t; try { t = await rpc('getblocktemplate', { rules: RULES }); } catch (e) { log(`getblocktemplate: ${e.message}`); return; }
@@ -163,7 +163,7 @@ async function refresh(force) {
     if (awaiting?.height !== t.height) awaiting = { height: t.height, since: Date.now() };
     if (Date.now() - awaiting.since < SPLIT_WAIT) return hold(`waiting for the coordinator's split for h${t.height}`);
   }
-  holding = null;
+  holding = null; stratum.pause(false);
   const tip = t.previousblockhash !== current?.prev;
   const bits = current && t.bits !== current.bits;
   const txs = current && t.transactions.length !== current.template.transactions.length;

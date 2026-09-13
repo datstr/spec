@@ -59,8 +59,10 @@ export class StratumServer {
     this.log(`stratum: ${c.remote} difficulty ${from} → ${d} (${why})`);
     c.sharesSince = 0; c.lastRetarget = Date.now();
   }
+  // While the gateway serves no work (holding), the clock stops: no shares are expected.
+  pause(on) { if (on === this.paused) return; this.paused = on; const now = Date.now(); for (const c of this.clients) { c.lastRetarget = now; c.sharesSince = 0; } }
   retarget(c) {
-    const v = this.vardiff; if (!v || c.fixedDiff) return;
+    const v = this.vardiff; if (!v || c.fixedDiff || this.paused) return;
     const now = Date.now(), elapsed = (now - c.lastRetarget) / 1000;
     if (c.sharesSince < 8 && elapsed < v.window) return;
     const perShare = elapsed / Math.max(c.sharesSince, 0.5);
