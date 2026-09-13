@@ -130,7 +130,7 @@ async function pollPool() {
   try {
     if (!earn.poolBase) { const g = await (await fetch(new URL('stats.json', location.href), { cache: 'no-store' })).json(); if (!g.pool?.url) return; earn.poolBase = new URL('pool', location.href).href; }
     const s = await (await fetch(earn.poolBase + '/stats.json', { cache: 'no-store' })).json();
-    const addr = earn.myAddress; if (!addr) return;
+    const addr = earn.myAddress; if (!addr) { const s2 = s; const bl = Math.max(1, s2.blocks.filter((b) => b.onChain && b.at * 1000 > Date.now() - 3600000).length); earn.blocksLastHour = bl; earn.W = s2.window.weight; earn.V = s2.split?.value ?? s2.tip?.value ?? 0; earn.poolRate = s2.hashrate ?? 0; earn.perShare = 0; return; }
     const mine = s.masters.find((m) => m.address === addr);
     earn.myWeight = mine?.weight_window ?? 0; earn.W = s.window.weight; earn.V = s.split?.value ?? s.tip?.value ?? 0; earn.poolRate = s.hashrate ?? 0;
     const line = s.split?.outputs?.find((o) => o.address === addr); earn.nextLine = line ? line.value_sats : 0;
@@ -243,7 +243,9 @@ function start() {
   // the stratum username: an address makes the tab its own identity paid there (SPEC 7); with a Nostr login the address goes into the signed descriptor instead
   const user = (!me && pay) ? `${pay}.${name}` : `${(gatewayPay ?? '').replace(/\.tab$/, '') || 'gateway'}.${name}`;
   if (!me && !pay) log(`no payout address: mining as the gateway's address`); else if (!me) log(`mining as ${pay}: paid there directly`);
-  earn.myAddress = pay || (gatewayPay ?? '').replace(/\.tab$/, '') || null; earn.shown = 0; earn.target = 0; earn.paidAll = null; earn.paidSats = 0; earn.paidBlocks = 0; earn.blocksWhileMining = 0; earn.seenBlocks = new Set(); setTimeout(pollPool, 1500);
+  // the panel counts only an address you gave: with none, your work is credited to the gateway's address and is not yours to count
+  earn.myAddress = pay || null; earn.shown = 0; earn.target = 0; earn.paidAll = null;
+  if (!pay) { $('winline').textContent = `no payout address: this tab's work is credited to the gateway's address${gatewayPay ? ' (' + gatewayPay.replace(/\.tab$/, '').slice(0, 14) + '…)' : ''}. Enter a tb1p address in "pay to" to be paid yourself.`; $('side').innerHTML = 'next block pays you <b>0 sats</b><br>paid on chain, all time <b>0 sats</b><br>enter a payout address to be paid'; $('winbar').style.width = '0'; } earn.paidSats = 0; earn.paidBlocks = 0; earn.blocksWhileMining = 0; earn.seenBlocks = new Set(); setTimeout(pollPool, 1500);
   localStorage.setItem('datstr.user', name); localStorage.setItem('datstr.pay', pay); localStorage.setItem('datstr.diff', diff);
   ws = new WebSocket(url); ws.binaryType = 'arraybuffer';
   $('status').textContent = 'connecting'; $('status').className = 'chain'; $('go').textContent = 'stop'; $('go').className = 'stop';
