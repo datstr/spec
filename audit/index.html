@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>datstr Audit</title>
+<meta name="description" content="Replay a datstr coordinator's ledger snapshot in your browser: every share verified with bitcoin-kernel, the window and the split recomputed and compared byte for byte.">
+<style>
+  :root { --bg:#0f1115; --card:#181b22; --line:#262b34; --fg:#e6e8ec; --muted:#9aa3b2; --accent:#6ea8fe; --good:#4ade80; --warn:#f0a04b; --bad:#f87171; }
+  * { box-sizing:border-box } html { scrollbar-color:var(--line) var(--bg) }
+  body { margin:0; padding:1.5rem; background:var(--bg); color:var(--fg); font:14px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace }
+  a { color:var(--accent) } h1 { font-size:1.25rem; margin:0 } h2 { font-size:1rem; color:var(--muted); margin:0 0 .6rem }
+  header { display:flex; justify-content:space-between; align-items:baseline; flex-wrap:wrap; gap:.5rem; border-bottom:1px solid var(--line); padding-bottom:.75rem; margin-bottom:1rem }
+  .motd { color:var(--muted) } .right { text-align:right } .nav a { margin-left:.75rem }
+  .chain { margin-left:.5rem; padding:.1rem .5rem; border-radius:.25rem; font-size:.8rem; font-weight:normal; vertical-align:middle; color:var(--warn); border:1px solid var(--warn) }
+  .chain.good { color:var(--good); border-color:var(--good) } .chain.bad { color:var(--bad); border-color:var(--bad) }
+  .good { color:var(--good) } .bad { color:var(--bad) } .stale { color:var(--warn) }
+  form.panel { display:flex; flex-wrap:wrap; gap:.6rem; align-items:center }
+  input { background:var(--bg); color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:.35rem .5rem; font:inherit }
+  input#api { flex:1; min-width:16rem } input#height { width:8rem }
+  button { background:var(--card); color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:.35rem .8rem; font:inherit; cursor:pointer } button:hover { border-color:var(--accent) }
+  .hero { display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:.75rem; margin:.75rem 0 }
+  .tile, .panel { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:.8rem .9rem } .panel { margin-bottom:.75rem }
+  .label { color:var(--muted); font-size:.8rem; text-transform:uppercase; letter-spacing:.04em }
+  .tile .big { font-size:1.5rem; line-height:1.25; margin-top:.2rem; font-variant-numeric:tabular-nums; word-break:break-word } .tile .sub { color:var(--muted); font-size:.8rem; margin-top:.15rem }
+  section { margin:1.5rem 0 } table { width:100%; border-collapse:collapse }
+  th, td { text-align:left; padding:.45rem .6rem; border-bottom:1px solid var(--line); vertical-align:top }
+  th { color:var(--muted); font-weight:600; font-size:.8rem; text-transform:uppercase } td.num, th.num { text-align:right; font-variant-numeric:tabular-nums } td.mono { word-break:break-all }
+  td.v { width:3rem; font-weight:700 } .bar { position:relative } .bar > span { position:absolute; inset:0; background:rgba(110,168,254,.16); border-radius:3px } .bar > em { position:relative; font-style:normal }
+  footer { color:var(--muted); margin-top:1rem; font-size:.8rem }
+</style>
+</head>
+<body>
+<header>
+  <div><h1>datstr Audit<span class="chain" id="verdict">idle</span></h1><div class="motd" id="sub">Replay a coordinator's ledger snapshot here, in this tab, with the same engine and the same split function.</div></div>
+  <div class="motd right"><div id="updated"></div><div id="engine"></div><div class="nav"><a href="https://datstr.com/spec/" target="_blank" rel="noopener">Spec</a><a href="https://github.com/datstr/spec/tree/gh-pages/audit" target="_blank" rel="noopener">Source</a></div></div>
+</header>
+
+<form class="panel" id="form">
+  <label>coordinator <input id="api" placeholder="http://127.0.0.1:3400"></label>
+  <label>height <input id="height" placeholder="latest"></label>
+  <button type="submit">replay</button>
+  <span class="motd" id="hint"></span>
+</form>
+
+<div class="hero" id="hero"></div>
+
+<section>
+  <h2>Checks</h2>
+  <table id="checks"><thead><tr><th></th><th>Check</th><th>Result</th></tr></thead><tbody><tr><td colspan="3" class="motd">enter a coordinator and press replay</td></tr></tbody></table>
+</section>
+
+<section>
+  <h2>Split: replayed against the snapshot</h2>
+  <div style="overflow-x:auto"><table id="split"><thead><tr><th class="num">Replayed</th><th class="num">Snapshot</th><th class="num">Share</th><th>Script</th><th></th></tr></thead><tbody></tbody></table></div>
+</section>
+
+<section>
+  <h2>Shares in the window</h2>
+  <div style="overflow-x:auto"><table id="shares"><thead><tr><th class="num">Seq</th><th>Share</th><th>Master</th><th class="num">Height</th><th class="num">Weight</th><th>Sig</th><th>Header</th><th>Merkle</th><th>Commit</th><th>Split</th><th>PoW</th></tr></thead><tbody></tbody></table></div>
+</section>
+
+<footer>Engine: <code>bitcoin-desktop/schema@v0.0.25</code> from jsDelivr with the <code>knots-blake2b</code> overlay; split: <code>gateway/lib/split.mjs</code> from this repository. Not checked here: that the previous block of each share is on the chain, which needs a node. Everything else in SPEC.md 8.1 is.</footer>
+
+<script type="module">
+const CDN = 'https://cdn.jsdelivr.net/gh/bitcoin-desktop/schema@v0.0.25';
+const SPLIT_LIB = new URL('../gateway/lib/split.mjs', import.meta.url).href;
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const num = (n, d) => n == null ? '-' : Number(n).toLocaleString(undefined, d != null ? { maximumFractionDigits: d } : {});
+const btc = (sats) => (sats / 1e8).toLocaleString(undefined, { minimumFractionDigits: 8, maximumFractionDigits: 8 }) + ' BTC';
+const pct = (a, b) => b > 0 ? (a / b * 100).toFixed(1) + '%' : '-';
+const tile = (label, big, sub) => `<div class="tile"><div class="label">${label}</div><div class="big">${big}</div>${sub ? `<div class="sub">${sub}</div>` : ''}</div>`;
+const mark = (ok) => ok === true ? '<span class="good">✓</span>' : ok === false ? '<span class="bad">✗</span>' : '<span class="stale">·</span>';
+const q = new URLSearchParams(location.search);
+const sameOrigin = location.pathname.endsWith('/audit') || location.pathname.endsWith('/audit/index.html') && !location.host.endsWith('datstr.com');
+$('api').value = q.get('api') ?? (location.host.endsWith('datstr.com') || location.protocol === 'file:' ? 'http://127.0.0.1:3400' : location.origin);
+$('height').value = q.get('height') ?? '';
+
+let engine;
+async function loadEngine(network) {
+  const [{ createKernel }, { knotsBlake2b }, pow, hash, nostr, split] = await Promise.all([
+    import(`${CDN}/codec/kernel.js`), import(`${CDN}/codec/overlays/knots-blake2b.js`), import(`${CDN}/codec/pow/knots-header-v2.js`), import(`${CDN}/codec/hash.js`), import(`${CDN}/codec/nostr.js`), import(SPLIT_LIB)]);
+  const j = async (p) => (await fetch(`${CDN}/${p}`)).json();
+  const overlays = [knotsBlake2b(await j('schema/overlays/knots-blake2b.jsonld'))];
+  if (network === 'btc:regtest-blake2b') overlays.push({ graph: { '@graph': [{ '@id': 'btc:regtest-blake2b', '@type': 'btc:NetworkParams', extends: 'btc:regtest', label: 'regtest-blake2b', name: 'regtest-blake2b', powHash: 'knots:blake2b-v2', structVariants: { 'btc:BlockHeader': [{ when: { field: 'version', bit: 31 }, struct: 'knots:BlockHeaderV2' }] }, blake2bHeight: 0, rdtsExpiryTime: 4102444800 }] } });
+  const k = createKernel({ core: await j('schema/core.jsonld'), proof: await j('schema/proof.jsonld'), script: await j('schema/script.jsonld'), chain: await j('schema/chain.jsonld'), validate: await j('schema/validate.jsonld'), network, overlays });
+  $('engine').textContent = `engine v0.0.25 · ${network}`;
+  return { k, pow, hash, nostr, split };
+}
+const rev = (h, hash) => hash.bytesToHex(hash.hexToBytes(h).reverse());
+const pair = (a, b, hash) => rev(hash.bytesToHex(hash.dsha256(new Uint8Array([...hash.hexToBytes(rev(a, hash)), ...hash.hexToBytes(rev(b, hash))]))), hash);
+const rootFrom = (cb, branches, hash) => branches.reduce((h, b) => pair(h, b, hash), cb);
+const meets = (a, t) => { for (let i = 0; i < 32; i++) { if (a[i] < t[i]) return true; if (a[i] > t[i]) return false; } return true; };
+
+async function replay(base, height) {
+  const checks = [], rows = [];
+  const check = (name, ok, detail) => { checks.push([name, ok, detail]); renderChecks(checks); };
+  const get = async (p) => { const r = await fetch(`${base}/${p}`, { cache: 'no-store' }); if (!r.ok) throw new Error(`${p}: ${r.status}`); return r.text(); };
+  const lines = (t) => t.split('\n').filter(Boolean).map((l) => JSON.parse(l));
+  $('verdict').textContent = 'replaying'; $('verdict').className = 'chain';
+  const stats = JSON.parse(await get('stats.json'));
+  if (!height) height = stats.blocks?.[0]?.height ?? stats.tip?.height; $('height').value = height;
+  const pool = JSON.parse(await get('pool.json')); const params = JSON.parse(pool.content);
+  const { k, pow, hash, nostr, split: S } = engine?.network === params.chain ? engine : (engine = { network: params.chain, ...(await loadEngine(params.chain)) });
+  check('pool descriptor signed by the coordinator', nostr.verifyNostrEvent(pool), `${pool.pubkey.slice(0, 16)}… · ${params.chain}`);
+  const masters = new Map(lines(await get('masters.jsonl')).map((m) => [m.pubkey, m]));
+  let goodDesc = 0; for (const m of masters.values()) if (nostr.verifyNostrEvent(m.descriptor)) goodDesc++;
+  check('miner descriptors signed by their masters', goodDesc === masters.size, `${goodDesc} of ${masters.size}`);
+  const shares = lines(await get('shares.jsonl'));
+  const snap = JSON.parse(await get(`snapshots/${height}.json`));
+  check(`snapshot ${height} loaded`, true, `split ${snap.split.slice(0, 12)}… · ${snap.sharesUpTo} shares credited at issue · need ${num(snap.need, 4)}`);
+  const upTo = shares.slice(0, snap.sharesUpTo);
+  const win = S.windowOf(upTo, snap.need);
+  check('window recomputed from the shares file', win.weight === snap.window.weight && JSON.stringify(win.shares.map((s) => s.id)) === JSON.stringify(snap.window.shares), `${win.shares.length} shares, weight ${num(win.weight, 4)} (snapshot ${num(snap.window.weight, 4)})`);
+  const r = S.computeSplit(win.shares, snap.tipValue, params, snap.owedBefore ?? {});
+  const outputs = r.outputs.map((o) => [o.script ?? masters.get(o.master)?.payout, o.value]).filter(([s]) => s);
+  const same = JSON.stringify(outputs) === JSON.stringify(snap.outputs);
+  check('split recomputed equals the snapshot byte for byte', same, `${outputs.length} outputs · ${btc(snap.tipValue)}`);
+  const total = snap.outputs.reduce((a, [, v]) => a + v, 0);
+  document.querySelector('#split tbody').innerHTML = (outputs.length ? outputs : [['', 0]]).map(([s, v], i) => { const sv = snap.outputs[i]; const ok = sv && sv[0] === s && sv[1] === v; return `<tr><td class="num">${btc(v)}</td><td class="num">${sv ? btc(sv[1]) : '-'}</td><td class="num bar"><span style="width:${total ? Math.min(v / total * 100, 100) : 0}%"></span><em>${pct(v, total)}</em></td><td class="mono">${esc(s)}</td><td class="v">${mark(ok)}</td></tr>`; }).join('') || '<tr><td colspan="5" class="motd">empty window: the block pays its finder</td></tr>';
+  // every share in the window, SPEC 8.1 minus the chain-context step
+  const splitsSeen = new Map(); let allGood = true;
+  const commitmentFor = (pubkey) => '6a20' + hash.bytesToHex(hash.taggedHash('datstr/share', hash.hexToBytes(pubkey + '00'.repeat(32))));
+  for (const s of win.shares) {
+    const res = { sig: null, header: null, merkle: null, commit: null, split: null, pow: null };
+    let ev, c;
+    try { ev = JSON.parse(await get(`shares/${s.id}.json`)); res.sig = nostr.verifyNostrEvent(ev) && ev.pubkey === s.master; c = JSON.parse(ev.content); } catch { res.sig = false; }
+    if (c) {
+      let header, coinbase;
+      try { header = k.codec.decode('BlockHeader', c.header); res.header = header.height === c.height && c.height === s.height; } catch { res.header = false; }
+      try { coinbase = k.codec.decode('Transaction', c.coinbase); res.merkle = header && rootFrom(k.codec.txid(coinbase), c.branches ?? [], hash) === header.merkleRoot && k.blocks.bip34Height(coinbase) === c.height; } catch { res.merkle = false; }
+      if (coinbase) {
+        const last = coinbase.outputs.at(-1); res.commit = last.value === 0 && last.scriptPubKey === commitmentFor(ev.pubkey);
+        const hasW = coinbase.outputs.length >= 2 && coinbase.outputs.at(-2).scriptPubKey.startsWith('6a24aa21a9ed');
+        const pays = coinbase.outputs.slice(0, coinbase.outputs.length - 1 - (hasW ? 1 : 0));
+        if (c.split === 'solo') res.split = pays.length === 1 && pays[0].scriptPubKey === masters.get(s.master)?.payout;
+        else {
+          let sp = splitsSeen.get(c.split);
+          if (!sp) { try { const sn = JSON.parse(await get(`snapshots/${c.height}.json`)); sp = sn.split === c.split ? sn : null; } catch { sp = null; } splitsSeen.set(c.split, sp); }
+          if (!sp) res.split = null; else { const V = pays.reduce((a, o) => a + o.value, 0); const want = S.scaleSplit(sp.outputs, V); res.split = pays.length === want.length && pays.every((o, i) => o.scriptPubKey === want[i][0] && o.value === want[i][1]); }
+        }
+      }
+      if (header) { const d = pow.hashHeaderV2Detailed(header); res.pow = meets(hash.hexToBytes(d.blake2b2), hash.hexToBytes(c.target)) && d.blockHash === s.hash && Math.abs(S.difficultyOf(c.target) - s.weight) < 1e-9; }
+    }
+    if (Object.values(res).some((v) => v === false)) allGood = false;
+    rows.push(`<tr><td class="num">${s.seq}</td><td class="mono"><a href="${base}/shares/${s.id}.json" target="_blank" rel="noopener">${s.id.slice(0, 12)}…</a></td><td class="mono" title="${esc(s.master)}">${s.master.slice(0, 12)}…</td><td class="num">${s.height}</td><td class="num">${num(s.weight, 4)}</td><td class="v">${mark(res.sig)}</td><td class="v">${mark(res.header)}</td><td class="v">${mark(res.merkle)}</td><td class="v">${mark(res.commit)}</td><td class="v">${mark(res.split)}</td><td class="v">${mark(res.pow)}</td></tr>`);
+    document.querySelector('#shares tbody').innerHTML = rows.join('');
+  }
+  check('every share in the window verifies (signature, header, merkle, commitment, split, proof of work)', allGood, `${win.shares.length} shares`);
+  const block = stats.blocks?.find((b) => b.height === height);
+  if (block) check(`block ${height} recorded`, !!block.onChain, `${block.hash.slice(0, 20)}… · relay ${block.relay} · ${block.split === 'solo' ? 'solo' : 'split ' + block.split.slice(0, 12) + '…'} · coinbase ${block.coinbase.slice(0, 12)}…`);
+  else check(`block ${height}`, null, 'no block record at this height');
+  const verdict = checks.every(([, ok]) => ok !== false);
+  $('verdict').textContent = verdict ? 'MATCH' : 'DIFFER'; $('verdict').className = 'chain ' + (verdict ? 'good' : 'bad');
+  $('hero').innerHTML = [tile('Snapshot', num(height), `${num(snap.sharesUpTo)} shares credited at issue`), tile('Window', num(win.shares.length) + ' shares', `weight ${num(win.weight, 4)} of ${num(snap.need, 4)}`), tile('Masters paid', num(outputs.length), `of ${num(masters.size)} known`), tile('Template value', btc(snap.tipValue), block ? 'block found at this height' : 'no block at this height')].join('');
+  $('updated').textContent = 'replayed ' + new Date().toLocaleTimeString();
+}
+function renderChecks(checks) { document.querySelector('#checks tbody').innerHTML = checks.map(([n, ok, d]) => `<tr><td class="v">${mark(ok)}</td><td>${esc(n)}</td><td class="motd">${d ?? ''}</td></tr>`).join(''); }
+$('form').onsubmit = async (e) => {
+  e.preventDefault(); const base = $('api').value.replace(/\/$/, ''), h = Number($('height').value) || null;
+  $('hint').textContent = ''; document.querySelector('#shares tbody').innerHTML = ''; document.querySelector('#split tbody').innerHTML = '';
+  try { await replay(base, h); history.replaceState(null, '', `?api=${encodeURIComponent(base)}&height=${$('height').value}`); }
+  catch (err) { $('verdict').textContent = 'error'; $('verdict').className = 'chain bad'; $('hint').textContent = err.message; }
+};
+if (q.get('api') || sameOrigin) $('form').requestSubmit();
+</script>
+</body>
+</html>

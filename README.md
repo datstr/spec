@@ -25,7 +25,9 @@ plugin/     the coordinator (SPEC 8 to 11): verifies shares, keeps the window, d
   standalone.mjs   node:http plus the engine's WebSocket server; documents at /, gateways at /ws
   index.mjs        the same as a JSS plugin: jss start --plugin plugin/index.mjs@/datstr
   test/regtest.sh  SPEC section 13: two gateways, one coordinator, replay, solo fallback, rejoin
-audit/      replay.mjs recomputes a ledger snapshot from the shares and compares it byte for byte
+audit/      replay.mjs recomputes a ledger snapshot from the shares and compares it byte for byte;
+            index.html does the same in a browser, with every share verified by the engine
+            (served by the coordinator at /audit, and at datstr.com/spec/audit/?api=<coordinator>)
 ```
 
 Needs Node 22 or later, a checkout of [bitcoin-desktop/schema](https://github.com/bitcoin-desktop/schema)

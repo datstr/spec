@@ -1,7 +1,7 @@
 // SPEC.md section 9: the deterministic split. Pure functions, so a coordinator and an auditor
 // compute the same bytes from the same shares.
 export function difficultyOf(targetHex) { // ratum's convention: 2^224 / target, as a float
-  let n = 0n; for (const b of Buffer.from(targetHex, 'hex')) n = (n << 8n) | BigInt(b);
+  let n = 0n; for (let i = 0; i < targetHex.length; i += 2) n = (n << 8n) | BigInt(parseInt(targetHex.slice(i, i + 2), 16));
   return n === 0n ? Infinity : Number((1n << 224n) * 1000000n / n) / 1e6;
 }
 
