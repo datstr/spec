@@ -24,6 +24,22 @@
   pre#log { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:.8rem; margin:0; max-height:22rem; overflow:auto; font-size:.82rem; color:var(--muted); white-space:pre-wrap }
   pre#log b { color:var(--good); font-weight:600 } pre#log i { color:var(--bad); font-style:normal }
   footer { color:var(--muted); margin-top:1rem; font-size:.8rem }
+  /* earnings: the counter and its rewards */
+  .earn { position:relative; overflow:hidden; background:linear-gradient(135deg,#181b22,#1b1f2a); border:1px solid var(--line); border-radius:12px; padding:1rem 1.2rem; margin:.75rem 0; display:grid; grid-template-columns:1fr auto; gap:1rem; align-items:center }
+  .earn .label { margin-bottom:.2rem }
+  .counter { font-size:2.8rem; line-height:1.1; font-variant-numeric:tabular-nums; letter-spacing:-1px; color:var(--good); transition:text-shadow .3s }
+  .counter.hot { text-shadow:0 0 18px rgba(74,222,128,.55) }
+  .counter small { font-size:1rem; color:var(--muted); letter-spacing:0; margin-left:.4rem }
+  .earn .side { text-align:right; color:var(--muted); font-size:.85rem; line-height:1.6 } .earn .side b { color:var(--fg) }
+  .bar { height:.5rem; background:var(--bg); border:1px solid var(--line); border-radius:999px; overflow:hidden; margin-top:.5rem } .bar > span { display:block; height:100%; width:0; background:var(--good); opacity:.7; transition:width .6s }
+  .float { position:absolute; left:50%; top:40%; transform:translate(-50%,0); color:var(--good); font-weight:700; font-size:1.1rem; pointer-events:none; animation:floatup 1.4s ease-out forwards }
+  @keyframes floatup { 0% { opacity:0; transform:translate(-50%,10px) } 15% { opacity:1 } 100% { opacity:0; transform:translate(-50%,-70px) } }
+  @keyframes pulse { 0% { box-shadow:0 0 0 0 rgba(74,222,128,.5) } 100% { box-shadow:0 0 0 18px rgba(74,222,128,0) } }
+  .tile.pulse { animation:pulse .7s ease-out }
+  .burst { position:fixed; inset:0; pointer-events:none; z-index:9 } .burst i { position:absolute; width:8px; height:14px; border-radius:2px; animation:fall 1.8s ease-in forwards }
+  @keyframes fall { 0% { transform:translateY(-20px) rotate(0); opacity:1 } 100% { transform:translateY(105vh) rotate(720deg); opacity:.2 } }
+  .toast { position:fixed; left:50%; top:1.2rem; transform:translateX(-50%); background:var(--card); border:1px solid var(--good); color:var(--fg); padding:.7rem 1.1rem; border-radius:10px; z-index:10; font-weight:700; box-shadow:0 8px 30px rgba(0,0,0,.4); animation:toastin .4s ease-out }
+  @keyframes toastin { from { opacity:0; transform:translate(-50%,-20px) } to { opacity:1; transform:translate(-50%,0) } }
 </style>
 </head>
 <body>
@@ -40,6 +56,10 @@
   <label>windows only <span style="display:flex;gap:.5rem;align-items:center;text-transform:none;letter-spacing:0;color:var(--fg)"><input id="winonly" type="checkbox" style="width:auto"> sleep unless the job's bits are <input id="minbits" value="1d00ffff" style="width:7rem"></span></label>
   <button type="submit" id="go">start</button>
 </form>
+<div class="earn" id="earn">
+  <div><div class="label">estimated sats earned, this session</div><div class="counter" id="counter">0<small>sats</small></div><div class="bar"><span id="winbar"></span></div><div class="motd" id="winline">joining the pool's window…</div></div>
+  <div class="side" id="side">next block pays you <b>–</b><br>paid on chain so far <b>–</b><br>blocks while mining <b>–</b></div>
+</div>
 <div class="hero" id="hero"></div>
 <section><h2>Log</h2><pre id="log"></pre></section>
 <div class="panel" id="who" style="margin-top:.75rem"><span class="label">identity</span> <span id="idline" class="motd">not logged in: mining as an address, or as the gateway</span> <span class="motd">· <a href="#" id="loginlink">log in with Nostr</a> to mine as your own master</span></div>
@@ -89,6 +109,43 @@ $('winonly').onchange = () => { localStorage.setItem('datstr.winonly', $('winonl
 let sleeping = false;
 const inWindow = () => !$('winonly').checked || !job?.bits || job.bits.toLowerCase() === $('minbits').value.trim().toLowerCase();
 const stats = { hashes: 0, accepted: 0, rejected: 0, diff: null, job: null, started: null, lastRate: 0 };
+// --- earnings: what the coordinator says the tab is worth, animated ---
+const earn = { shown: 0, target: 0, paidSats: 0, paidBlocks: 0, seenBlocks: new Set(), poolBase: null, myAddress: null, myWeight: 0, W: 0, V: 0, nextLine: 0, blocksWhileMining: 0, perShare: 0, paidAt: new Map() };
+const satsOf = (n) => Math.round(n).toLocaleString();
+function bump(sats, label) {
+  earn.target += sats; const c = $('counter'); c.classList.add('hot'); setTimeout(() => c.classList.remove('hot'), 400);
+  const f = document.createElement('div'); f.className = 'float'; f.textContent = '+' + satsOf(sats) + ' sats' + (label ? ' · ' + label : ''); $('earn').appendChild(f); setTimeout(() => f.remove(), 1500);
+  const t = $('hero').children[1]; if (t) { t.classList.remove('pulse'); void t.offsetWidth; t.classList.add('pulse'); }
+}
+function burst(text) {
+  const b = document.createElement('div'); b.className = 'burst';
+  for (let i = 0; i < 90; i++) { const p = document.createElement('i'); p.style.left = Math.random() * 100 + 'vw'; p.style.background = ['#4ade80', '#6ea8fe', '#f0a04b', '#e6e8ec'][i % 4]; p.style.animationDelay = (Math.random() * .6) + 's'; p.style.animationDuration = (1.4 + Math.random()) + 's'; b.appendChild(p); }
+  document.body.appendChild(b); setTimeout(() => b.remove(), 3000);
+  const t = document.createElement('div'); t.className = 'toast'; t.textContent = text; document.body.appendChild(t); setTimeout(() => t.remove(), 5000);
+}
+(function animate() { const d = earn.target - earn.shown; earn.shown += Math.abs(d) < 0.5 ? d : d * 0.08; $('counter').innerHTML = satsOf(earn.shown) + '<small>sats</small>'; requestAnimationFrame(animate); })();
+async function pollPool() {
+  try {
+    if (!earn.poolBase) { const g = await (await fetch(new URL('stats.json', location.href), { cache: 'no-store' })).json(); if (!g.pool?.url) return; earn.poolBase = g.pool.url.replace(/^ws/, 'http').replace(/\/ws$/, ''); }
+    const s = await (await fetch(earn.poolBase + '/stats.json', { cache: 'no-store' })).json();
+    const addr = earn.myAddress; if (!addr) return;
+    const mine = s.masters.find((m) => m.address === addr);
+    earn.myWeight = mine?.weight_window ?? 0; earn.W = s.window.weight; earn.V = s.split?.value ?? s.tip?.value ?? 0;
+    const line = s.split?.outputs?.find((o) => o.address === addr); earn.nextLine = line ? line.value_sats : 0;
+    earn.perShare = earn.W > 0 && stats.diff ? stats.diff / earn.W * earn.V : 0;
+    // blocks the pool found while this tab mined: what they paid this address, from the snapshots
+    for (const b of s.blocks.slice(0, 20)) {
+      if (!b.onChain || earn.seenBlocks.has(b.hash) || (stats.started && b.at * 1000 < stats.started - 60000)) continue;
+      earn.seenBlocks.add(b.hash); earn.blocksWhileMining++;
+      try { const snap = await (await fetch(`${earn.poolBase}/snapshots/${b.height}.json`)).json(); const out = snap.outputs.find(([spk]) => spk === mine?.payout); const sats = out ? out[1] : 0; earn.paidSats += sats; if (sats) earn.paidBlocks++; burst(`Block ${b.height.toLocaleString()} found by the pool${sats ? ` · ${satsOf(sats)} sats to you` : ''}`); log(`BLOCK ${b.height} by the pool${sats ? `: ${satsOf(sats)} sats paid to ${addr.slice(0, 12)}…` : ' (your shares were not in its window yet)'}`, 'b'); } catch {}
+    }
+    $('winbar').style.width = (earn.W ? Math.min(100, earn.myWeight / earn.W * 100 * 20) : 0) + '%';
+    $('winline').textContent = earn.W ? `your share of the pool's window: ${(earn.myWeight / earn.W * 100).toFixed(3)}% (${earn.myWeight.toFixed(4)} of ${earn.W.toFixed(1)}) · each share now adds ≈ ${satsOf(earn.perShare)} sats to the next block's line` : 'joining the pool\'s window…';
+    $('side').innerHTML = `next block pays you <b>${satsOf(earn.nextLine)} sats</b><br>paid on chain so far <b>${satsOf(earn.paidSats)} sats</b> in ${earn.paidBlocks} block${earn.paidBlocks === 1 ? '' : 's'}<br>blocks while mining <b>${earn.blocksWhileMining}</b>`;
+    if (earn.target < earn.nextLine + earn.paidSats) earn.target = earn.nextLine + earn.paidSats;
+  } catch {}
+}
+setInterval(pollPool, 5000);
 let ws = null, workers = [], job = null, en1 = null, en2size = 8, en2 = null, target = null, jobKey = 0, pending = new Map(), nextId = 100, tick = null, windowHashes = [];
 const log = (s, cls) => { const el = $('log'); el.innerHTML += (cls ? `<${cls}>${esc(s)}</${cls}>` : esc(s)) + '\n'; el.scrollTop = el.scrollHeight; };
 const hr = (h) => { const u = ['H/s', 'kH/s', 'MH/s', 'GH/s']; let i = 0; while (h >= 1000 && i < 3) { h /= 1000; i++; } return h.toLocaleString(undefined, { maximumFractionDigits: h < 10 ? 2 : 1 }) + ' ' + u[i]; };
@@ -146,7 +203,7 @@ async function onLine(line) {
   if (m.id === '2') { log(m.result === true ? 'authorized' : 'authorize refused: ' + JSON.stringify(m.error), m.result === true ? 'b' : 'i'); if (m.result === true && me) identify(); return; }
   if (m.id === '3') { if (m.error) return log('identity: ' + (m.error[1] ?? JSON.stringify(m.error)), 'i'); log(`identity: the gateway derives worker ${m.result.worker.slice(0, 12)}… for my master; signing the descriptor and delegation`); signIdentity(m.result.worker, m.result.chain, m.result.payout).catch((e) => log('identity: signing failed: ' + e.message, 'i')); return; }
   if (m.id === '4') { if (m.error) return log('identity: refused: ' + (m.error[1] ?? JSON.stringify(m.error)), 'i'); log(`identity: mining as master ${m.result.master.slice(0, 12)}…, paid at ${$('pay').value.trim()}`, 'b'); idline(`Nostr master ${m.result.master.slice(0, 12)}… · paid to ${$('pay').value.trim()} · worker ${m.result.worker.slice(0, 12)}… on the gateway`, 'good'); return; }
-  if (pending.has(String(m.id))) { pending.delete(String(m.id)); if (m.result === true) { stats.accepted++; log('share accepted', 'b'); } else { stats.rejected++; log('share rejected: ' + (m.error?.[1] ?? JSON.stringify(m.error)), 'i'); } return; }
+  if (pending.has(String(m.id))) { pending.delete(String(m.id)); if (m.result === true) { stats.accepted++; log('share accepted', 'b'); bump(earn.perShare || 1, 'share'); } else { stats.rejected++; log('share rejected: ' + (m.error?.[1] ?? JSON.stringify(m.error)), 'i'); } return; }
   const { parseNotify, targetForDifficulty } = await import(CORE);
   if (m.method === 'mining.set_difficulty') { stats.diff = m.params[0]; target = targetForDifficulty(stats.diff); log(`difficulty ${stats.diff}`); if (job) dispatch(); }
   else if (m.method === 'mining.notify') { job = parseNotify(m.params); stats.job = job.id; log(`job ${job.id}${job.clean ? ' (clean)' : ''}`); dispatch(); }
@@ -158,6 +215,7 @@ function start() {
   // the stratum username: an address makes the tab its own identity paid there (SPEC 7); with a Nostr login the address goes into the signed descriptor instead
   const user = (!me && pay) ? `${pay}.${name}` : `${(gatewayPay ?? '').replace(/\.tab$/, '') || 'gateway'}.${name}`;
   if (!me && !pay) log(`no payout address: mining as the gateway's address`); else if (!me) log(`mining as ${pay}: paid there directly`);
+  earn.myAddress = pay || (gatewayPay ?? '').replace(/\.tab$/, '') || null; earn.shown = 0; earn.target = 0; earn.paidSats = 0; earn.paidBlocks = 0; earn.blocksWhileMining = 0; earn.seenBlocks = new Set(); setTimeout(pollPool, 1500);
   localStorage.setItem('datstr.user', name); localStorage.setItem('datstr.pay', pay); localStorage.setItem('datstr.diff', diff);
   ws = new WebSocket(url); ws.binaryType = 'arraybuffer';
   $('status').textContent = 'connecting'; $('status').className = 'chain'; $('go').textContent = 'stop'; $('go').className = 'stop';
