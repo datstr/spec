@@ -132,7 +132,10 @@ async function pollPool() {
     const mine = s.masters.find((m) => m.address === addr);
     earn.myWeight = mine?.weight_window ?? 0; earn.W = s.window.weight; earn.V = s.split?.value ?? s.tip?.value ?? 0;
     const line = s.split?.outputs?.find((o) => o.address === addr); earn.nextLine = line ? line.value_sats : 0;
-    earn.perShare = earn.W > 0 && stats.diff ? stats.diff / earn.W * earn.V : 0;
+    // a share's expected value: its slice of every block the pool finds while it sits in the window (about an hour),
+    // taken from how many blocks the pool found in the last hour, at least one
+    const blocksLastHour = Math.max(1, s.blocks.filter((b) => b.onChain && b.at * 1000 > Date.now() - 3600000).length);
+    earn.perShare = earn.W > 0 && stats.diff ? stats.diff / earn.W * earn.V * blocksLastHour : 0; earn.blocksLastHour = blocksLastHour;
     // blocks the pool found while this tab mined: what they paid this address, from the snapshots
     for (const b of s.blocks.slice(0, 20)) {
       if (!b.onChain || earn.seenBlocks.has(b.hash) || (stats.started && b.at * 1000 < stats.started - 60000)) continue;
@@ -140,7 +143,7 @@ async function pollPool() {
       try { const snap = await (await fetch(`${earn.poolBase}/snapshots/${b.height}.json`)).json(); const out = snap.outputs.find(([spk]) => spk === mine?.payout); const sats = out ? out[1] : 0; earn.paidSats += sats; if (sats) earn.paidBlocks++; burst(`Block ${b.height.toLocaleString()} found by the pool${sats ? ` · ${satsOf(sats)} sats to you` : ''}`); log(`BLOCK ${b.height} by the pool${sats ? `: ${satsOf(sats)} sats paid to ${addr.slice(0, 12)}…` : ' (your shares were not in its window yet)'}`, 'b'); } catch {}
     }
     $('winbar').style.width = (earn.W ? Math.min(100, earn.myWeight / earn.W * 100 * 20) : 0) + '%';
-    $('winline').textContent = earn.W ? `your share of the pool's window: ${(earn.myWeight / earn.W * 100).toFixed(3)}% (${earn.myWeight.toFixed(4)} of ${earn.W.toFixed(1)}) · each share now adds ≈ ${satsOf(earn.perShare)} sats to the next block's line` : 'joining the pool\'s window…';
+    $('winline').textContent = earn.W ? `your share of the pool's window: ${(earn.myWeight / earn.W * 100).toFixed(3)}% (${earn.myWeight.toFixed(4)} of ${earn.W.toFixed(1)}) · each share is worth ≈ ${satsOf(earn.perShare)} sats (pool found ${earn.blocksLastHour} block${earn.blocksLastHour === 1 ? '' : 's'} in the last hour)` : 'joining the pool\'s window…';
     $('side').innerHTML = `next block pays you <b>${satsOf(earn.nextLine)} sats</b><br>paid on chain so far <b>${satsOf(earn.paidSats)} sats</b> in ${earn.paidBlocks} block${earn.paidBlocks === 1 ? '' : 's'}<br>blocks while mining <b>${earn.blocksWhileMining}</b>`;
     if (earn.target < earn.nextLine + earn.paidSats) earn.target = earn.nextLine + earn.paidSats;
   } catch {}
