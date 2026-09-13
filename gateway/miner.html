@@ -154,9 +154,11 @@ const stats = { hashes: 0, accepted: 0, rejected: 0, diff: null, job: null, star
 // --- earnings: what the coordinator says the tab is worth, animated ---
 const earn = { shown: 0, target: 0, paidSats: 0, paidBlocks: 0, seenBlocks: new Set(), poolBase: null, myAddress: null, myWeight: 0, W: 0, V: 0, nextLine: 0, blocksWhileMining: 0, perShare: 0, paidAt: new Map() };
 const satsOf = (n) => Math.round(n).toLocaleString();
+// a share's estimated value floats up and the counter glows, but the counter itself only ever shows facts:
+// what the chain paid this address plus its line in the coordinator's current split
 function bump(sats, label) {
-  earn.target += sats; const c = $('counter'); c.classList.add('hot'); setTimeout(() => c.classList.remove('hot'), 400);
-  const f = document.createElement('div'); f.className = 'float'; f.textContent = '+' + satsOf(sats) + ' sats' + (label ? ' · ' + label : ''); $('earn').appendChild(f); setTimeout(() => f.remove(), 1500);
+  const c = $('counter'); c.classList.add('hot'); setTimeout(() => c.classList.remove('hot'), 400);
+  const f = document.createElement('div'); f.className = 'float'; f.textContent = '≈ +' + satsOf(sats) + ' sats' + (label ? ' · ' + label : ''); $('earn').appendChild(f); setTimeout(() => f.remove(), 1500);
   const t = $('hero').children[1]; if (t) { t.classList.remove('pulse'); void t.offsetWidth; t.classList.add('pulse'); }
 }
 function burst(text) {
@@ -189,8 +191,7 @@ async function pollPool() {
     $('winbar').style.width = (earn.W ? Math.min(100, earn.myWeight / earn.W * 100 * 20) : 0) + '%';
     $('winline').textContent = earn.W ? `your share of the pool's window: ${(earn.myWeight / earn.W * 100).toFixed(3)}% (${earn.myWeight.toFixed(4)} of ${earn.W.toFixed(1)}) · each share is worth ≈ ${satsOf(earn.perShare)} sats (pool found ${earn.blocksLastHour} block${earn.blocksLastHour === 1 ? '' : 's'} in the last hour)` : 'joining the pool\'s window…';
     $('side').innerHTML = `next block pays you <b>${satsOf(earn.nextLine)} sats</b><br>paid on chain, all time <b>${satsOf(earn.paidAll ?? 0)} sats</b><br>this session: <b>${satsOf(earn.paidSats)} sats</b> in ${earn.paidBlocks} block${earn.paidBlocks === 1 ? '' : 's'}, ${earn.blocksWhileMining} pool block${earn.blocksWhileMining === 1 ? '' : 's'} seen`;
-    const floor = earn.nextLine + (earn.paidAll ?? earn.paidSats);
-    if (earn.target < floor) earn.target = floor;
+    earn.target = earn.nextLine + (earn.paidAll ?? earn.paidSats);
   } catch {}
 }
 setInterval(pollPool, 5000);
