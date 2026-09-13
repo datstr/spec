@@ -37,7 +37,7 @@ import { fileURLToPath } from 'node:url';
 import { makeRpc } from './lib/rpc.mjs';
 import { loadEngine } from './lib/engine.mjs';
 import { buildBlock } from './lib/block.mjs';
-import { targetForDifficulty, meets } from './lib/target.mjs';
+import { targetForDifficulty, difficultyOfTarget, meets } from './lib/target.mjs';
 import { StratumServer } from './stratum.mjs';
 import { scriptToAddress } from './lib/address.mjs';
 import { signEvent, randomKey, pubkeyOf, verifyEvent, content as contentOf } from './lib/nostr.mjs';
@@ -231,6 +231,8 @@ const stratum = new StratumServer({ difficulty: DIFF, vardiff: VARDIFF, log, max
   return { ok: true };
 } });
 
+let tipInfo = null; // the block the current job builds on: height, hash, time
+const MIN_DIFF_WINDOW = /testnet4/.test(NETWORK) ? 1200 : null; // testnet4: a min-difficulty block is allowed 20 minutes after the tip
 let holding = null; // why no work is being served, logged once per reason
 let minBitsNoted = false;
 let awaiting = null; const SPLIT_WAIT = Number(args['split-wait'] ?? 3) * 1000;
@@ -255,7 +257,7 @@ async function refresh(force) {
   const txs = current && t.transactions.length !== current.template.transactions.length;
   const old = current && Date.now() - current.made > REFRESH;
   if (!force && current && !tip && !bits && !txs && !old) return;
-  if (tip) seen = new Set();
+  if (tip) { seen = new Set(); try { const h = await rpc('getblockheader', t.previousblockhash); tipInfo = { height: h.height, hash: h.hash, time: h.time }; } catch { tipInfo = null; } }
   current = makeJob(t);
   stratum.publish(current, tip); stratum.retire(8);
   log(`job ${current.id} h${t.height} prev ${t.previousblockhash.slice(0, 16)}… bits ${t.bits} txs ${t.transactions.length} value ${t.coinbasevalue} ${current.splitId === 'solo' ? 'solo' : 'split ' + current.splitId.slice(0, 8) + ' (' + current.block.nSplit + ' outputs)'}${tip ? ' (new tip)' : bits ? ' (bits changed)' : txs ? ' (mempool)' : ' (refresh)'}`);
@@ -274,6 +276,7 @@ function snapshot() {
     difficulty: DIFF, stop_height: STOP < Infinity ? STOP : null, min_bits: MIN_BITS, pay: payAddrs,
     work_update_seconds: REFRESH / 1000, poll_seconds: POLL / 1000, node_warnings: nodeWarnings,
     stratum: { listening: true, connections: stratum.clients.size, subscriptions: [...stratum.clients].filter((c) => c.subscribed).length, hashrate },
+    tip: tipInfo && { ...tipInfo, window_opens_at: MIN_DIFF_WINDOW ? tipInfo.time + MIN_DIFF_WINDOW + 1 : null, window_open: j ? j.bits.toLowerCase() === '1d00ffff' : false, network_difficulty: j ? difficultyOfTarget(j.networkTarget) : null },
     shares_accepted: { count: stats.shares, diff: stats.diff }, shares_rejected: { count: stats.rejected, diff: stats.rejectedDiff }, blocks_found: stats.blocks, vardiff: VARDIFF,
     hashrate: { history, interval_seconds: 60 },
     job: j && {

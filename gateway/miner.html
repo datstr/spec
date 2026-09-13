@@ -60,6 +60,7 @@
   <div><div class="label">estimated sats earned, this session</div><div class="counter" id="counter">0<small>sats</small></div><div class="bar"><span id="winbar"></span></div><div class="motd" id="winline">joining the pool's window…</div></div>
   <div class="side" id="side">next block pays you <b>–</b><br>paid on chain so far <b>–</b><br>blocks while mining <b>–</b></div>
 </div>
+<div class="earn" id="clock" style="grid-template-columns:auto 1fr;gap:1.4rem"><div><div class="label" id="clocklabel">next window</div><div class="counter" id="countdown" style="color:var(--accent)">–</div></div><div class="motd" id="clocknote"></div></div>
 <div class="hero" id="hero"></div>
 <section><h2>Log</h2><pre id="log"></pre></section>
 <div class="panel" id="who" style="margin-top:.75rem"><span class="label">identity</span> <span id="idline" class="motd">not logged in: mining as an address, or as the gateway</span> <span class="motd">· <a href="#" id="loginlink">log in with Nostr</a> to mine as your own master</span></div>
@@ -130,7 +131,7 @@ async function pollPool() {
     const s = await (await fetch(earn.poolBase + '/stats.json', { cache: 'no-store' })).json();
     const addr = earn.myAddress; if (!addr) return;
     const mine = s.masters.find((m) => m.address === addr);
-    earn.myWeight = mine?.weight_window ?? 0; earn.W = s.window.weight; earn.V = s.split?.value ?? s.tip?.value ?? 0;
+    earn.myWeight = mine?.weight_window ?? 0; earn.W = s.window.weight; earn.V = s.split?.value ?? s.tip?.value ?? 0; earn.poolRate = s.hashrate ?? 0;
     const line = s.split?.outputs?.find((o) => o.address === addr); earn.nextLine = line ? line.value_sats : 0;
     // a share's expected value: its slice of every block the pool finds while it sits in the window (about an hour),
     // taken from how many blocks the pool found in the last hour, at least one
@@ -149,6 +150,26 @@ async function pollPool() {
   } catch {}
 }
 setInterval(pollPool, 5000);
+// --- the clock: on a chain with a minimum-difficulty window, a countdown to it; on any chain, the pool's expected time to a block ---
+const tipState = { tip: null, poolRate: 0, at: 0 };
+async function pollTip() { try { const g = await (await fetch(new URL('stats.json', location.href), { cache: 'no-store' })).json(); tipState.tip = g.tip; tipState.at = Date.now(); } catch {} }
+setInterval(pollTip, 3000); pollTip();
+const mmss = (s) => { s = Math.max(0, Math.floor(s)); return s >= 3600 ? Math.floor(s / 3600) + 'h ' + Math.floor(s % 3600 / 60) + 'm' : Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
+const expectSeconds = () => { const t = tipState.tip; const rate = earn.poolRate; if (!t?.network_difficulty || !rate) return null; return t.network_difficulty * 4294967296 / rate; };
+setInterval(() => {
+  const t = tipState.tip; if (!t) return;
+  const now = Date.now() / 1000, exp = expectSeconds();
+  if (t.window_opens_at && !t.window_open && t.window_opens_at > now) {
+    $('clocklabel').textContent = 'minimum-difficulty window opens in'; $('countdown').textContent = mmss(t.window_opens_at - now);
+    $('clocknote').textContent = `block ${t.height.toLocaleString()} was ${mmss(now - t.time)} ago · twenty minutes after it, anyone may mine at minimum difficulty, and this pool usually wins within a minute of that`;
+  } else if (t.window_opens_at && t.window_open) {
+    $('clocklabel').textContent = 'window open · expected pool block in'; $('countdown').textContent = exp != null ? '~' + mmss(exp) : '–';
+    $('clocknote').textContent = `every share now can be the block · ${earn.poolRate ? '~' + hr(earn.poolRate) + ' pool hashrate' : ''}`;
+  } else {
+    $('clocklabel').textContent = 'expected pool block in'; $('countdown').textContent = exp != null ? (exp > 86400 * 30 ? 'a long time' : '~' + mmss(exp)) : '–';
+    $('clocknote').textContent = `network difficulty ${t.network_difficulty ? t.network_difficulty.toLocaleString(undefined, { maximumFractionDigits: 0 }) : '?'} · ${earn.poolRate ? '~' + hr(earn.poolRate) + ' pool hashrate' : 'pool hashrate unknown'}`;
+  }
+}, 1000);
 let ws = null, workers = [], job = null, en1 = null, en2size = 8, en2 = null, target = null, jobKey = 0, pending = new Map(), nextId = 100, tick = null, windowHashes = [];
 const log = (s, cls) => { const el = $('log'); el.innerHTML += (cls ? `<${cls}>${esc(s)}</${cls}>` : esc(s)) + '\n'; el.scrollTop = el.scrollHeight; };
 const hr = (h) => { const u = ['H/s', 'kH/s', 'MH/s', 'GH/s']; let i = 0; while (h >= 1000 && i < 3) { h /= 1000; i++; } return h.toLocaleString(undefined, { maximumFractionDigits: h < 10 ? 2 : 1 }) + ' ' + u[i]; };
