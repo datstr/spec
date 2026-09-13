@@ -49,6 +49,9 @@ const CORE = new URL('miner-core.mjs', location.href).href;
 const q = new URLSearchParams(location.search);
 $('url').value = q.get('url') ?? `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/stratum`;
 $('user').value = q.get('user') ?? localStorage.getItem('datstr.user') ?? '';
+// blank username: the gateway's own payout address, which is where a tab's work is credited today
+let gatewayPay = null;
+fetch(new URL('stats.json', location.href), { cache: 'no-store' }).then((r) => r.json()).then((s) => { gatewayPay = s.pay?.[0] ? s.pay[0] + '.tab' : null; if (gatewayPay) $('user').placeholder = gatewayPay; }).catch(() => {});
 $('diff').value = q.get('diff') ?? localStorage.getItem('datstr.diff') ?? '';
 $('workers').value = q.get('workers') ?? Math.max(1, (navigator.hardwareConcurrency || 4) - 1);
 const stats = { hashes: 0, accepted: 0, rejected: 0, diff: null, job: null, started: null, lastRate: 0 };
@@ -111,8 +114,9 @@ async function onLine(line) {
   else if (m.method === 'mining.notify') { job = parseNotify(m.params); stats.job = job.id; log(`job ${job.id}${job.clean ? ' (clean)' : ''}`); dispatch(); }
 }
 function start() {
-  const url = $('url').value.trim(), user = $('user').value.trim(), diff = $('diff').value.trim(), n = Math.max(1, Number($('workers').value) || 1);
-  if (!user) return log('username needed: an address, optionally .name', 'i');
+  const url = $('url').value.trim(), diff = $('diff').value.trim(), n = Math.max(1, Number($('workers').value) || 1);
+  let user = $('user').value.trim();
+  if (!user) { if (!gatewayPay) return log('username needed: an address, optionally .name', 'i'); user = gatewayPay; $('user').value = user; log(`no username given: mining as ${user}, the gateway's payout address`); }
   localStorage.setItem('datstr.user', user); localStorage.setItem('datstr.diff', diff);
   ws = new WebSocket(url); ws.binaryType = 'arraybuffer';
   $('status').textContent = 'connecting'; $('status').className = 'chain'; $('go').textContent = 'stop'; $('go').className = 'stop';
