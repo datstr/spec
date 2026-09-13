@@ -6,6 +6,11 @@
 //                          [--port 3333] [--diff 1] [--poll 2] [--refresh 30] [--worker <hex>] [--activation N]
 //                          [--stop-height N] [--min-bits 1d00ffff] [--api 3334]
 //                          [--pool ws://host:port/ws] [--key <hex>] [--key-file <path>]
+//                          [--vardiff on|off] [--vardiff-target 10] [--vardiff-min 0.0001] [--vardiff-max 1000000]
+//
+// --diff D         the difficulty every miner starts at (ratum's convention: 1 expects 2^32 hashes).
+// --vardiff        on by default: each connection's difficulty moves so it sends a share about
+//                  every --vardiff-target seconds. A miner pins its own with d=<n> in the password.
 //
 // --pool URL       a datstr coordinator. The gateway signs shares with its worker key, follows
 //                  the coordinator's coinbase split, and falls back to solo work while it is
@@ -49,8 +54,7 @@ const { k, pow, hash, script } = await loadEngine({ network: NETWORK, activation
 const { hexToBytes, bytesToHex, taggedHash } = hash;
 const payAddrs = (args.pay ?? (await readFile(`${homedir()}/knots-testnet4/miner-addresses.txt`, 'utf8')).trim().split('\n')[0]).split(',').map((s) => s.trim());
 const payScripts = payAddrs.map((a) => { const s = script.addressToScript(a, k.params); if (!s) throw new Error(`bad address for ${NETWORK}: ${a}`); return s; });
-const shareTarget = targetForDifficulty(DIFF);
-const shareTargetHex = bytesToHex(shareTarget);
+const VARDIFF = args.vardiff === 'off' ? null : { targetSeconds: Number(args['vardiff-target'] ?? 10), min: Number(args['vardiff-min'] ?? 0.0001), max: Number(args['vardiff-max'] ?? 1e6) };
 
 // --- the worker key and the coordinator (SPEC 4, 8, 9) ---
 let KEY = args.key;
@@ -90,7 +94,7 @@ function poolSend(obj) { if (pool.connected && pool.ws) pool.ws.send(JSON.string
 poolConnect();
 
 let jobSeq = 0, current = null, seen = new Set();
-const stats = { shares: 0, rejected: 0, blocks: 0 };
+const stats = { shares: 0, rejected: 0, blocks: 0, diff: 0, rejectedDiff: 0 };
 const started = Date.now();
 let VERSION = 'datstr-gateway/0.0.1';
 try { VERSION += '/' + execSync('git rev-parse --short HEAD', { cwd: fileURLToPath(new URL('.', import.meta.url)), stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim(); } catch {}
@@ -99,7 +103,7 @@ let nodeWarnings = [];
 const blocks = []; // found blocks, newest first
 const recent = []; // [time, difficulty] of accepted shares, for the hashrate estimate
 const clientStats = new WeakMap();
-const cstat = (c) => { let x = clientStats.get(c); if (!x) { x = { shares: 0, rejected: 0, lastShare: null, since: Date.now(), recent: [] }; clientStats.set(c, x); } return x; };
+const cstat = (c) => { let x = clientStats.get(c); if (!x) { x = { shares: 0, rejected: 0, diff: 0, rejectedDiff: 0, lastShare: null, since: Date.now(), recent: [] }; clientStats.set(c, x); } return x; };
 const rateOf = (samples, now) => { const cut = now - 600000; while (samples.length && samples[0][0] < cut) samples.shift(); const from = Math.max(cut, started); return samples.reduce((a, [, d]) => a + d * 4294967296, 0) / Math.max(1, (now - from) / 1000); };
 
 function makeJob(t) {
@@ -116,15 +120,16 @@ function makeJob(t) {
   };
 }
 
-const stratum = new StratumServer({ difficulty: DIFF, log, onShare: async ({ job, fields, user, client }) => {
+const stratum = new StratumServer({ difficulty: DIFF, vardiff: VARDIFF, log, onShare: async ({ job, fields, user, client, diff, target }) => {
   const header = { ...job.block.header, ...fields };
   const d = pow.hashHeaderV2Detailed(header);
   const powBytes = hexToBytes(d.blake2b2), hashBytes = hexToBytes(d.blockHash);
   const cs = cstat(client);
-  if (!meets(powBytes, shareTarget)) { stats.rejected++; cs.rejected++; return { ok: false, code: 23, reason: 'low difficulty' }; }
-  if (seen.has(d.blockHash)) { stats.rejected++; cs.rejected++; return { ok: false, code: 22, reason: 'duplicate' }; }
+  if (!meets(powBytes, target)) { stats.rejected++; cs.rejected++; cs.rejectedDiff += diff; stats.rejectedDiff += diff; return { ok: false, code: 23, reason: 'low difficulty' }; }
+  if (seen.has(d.blockHash)) { stats.rejected++; cs.rejected++; cs.rejectedDiff += diff; stats.rejectedDiff += diff; return { ok: false, code: 22, reason: 'duplicate' }; }
   seen.add(d.blockHash);
-  stats.shares++; cs.shares++; cs.lastShare = Date.now(); recent.push([Date.now(), DIFF]); cs.recent.push([Date.now(), DIFF]);
+  stats.shares++; stats.diff += diff; cs.shares++; cs.diff += diff; cs.lastShare = Date.now(); recent.push([Date.now(), diff]); cs.recent.push([Date.now(), diff]);
+  const shareTargetHex = bytesToHex(target);
   const isBlock = meets(hashBytes, job.networkTarget);
   const stale = job.prev !== current?.prev;
   const blockHex = isBlock ? k.codec.encodeHex('Block', { header, transactions: job.block.transactions }) : null;
@@ -132,7 +137,7 @@ const stratum = new StratumServer({ difficulty: DIFF, log, onShare: async ({ job
     chain: NETWORK, height: job.height, header: k.codec.encodeHex('BlockHeader', header), coinbase: k.codec.encodeHex('Transaction', job.block.coinbase), branches: job.branches,
     target: shareTargetHex, split: job.splitId, parents: [], job: job.id, ...(blockHex && job.height <= STOP ? { block: blockHex } : {}),
   } }) });
-  log(`share ${d.blockHash.slice(0, 20)}… job ${job.id} h${job.height} ${user}${isBlock ? ' BLOCK' : ''}${stale ? ' (stale job)' : ''}${job.splitId === 'solo' ? '' : ' split ' + job.splitId.slice(0, 8)}`);
+  log(`share ${d.blockHash.slice(0, 20)}… job ${job.id} h${job.height} diff ${diff} ${user}${isBlock ? ' BLOCK' : ''}${stale ? ' (stale job)' : ''}${job.splitId === 'solo' ? '' : ' split ' + job.splitId.slice(0, 8)}`);
   if (isBlock && job.height > STOP) { log(`BLOCK ${d.blockHash} at height ${job.height} NOT submitted: above --stop-height ${STOP}`); return { ok: true }; }
   if (isBlock) {
     const hex = blockHex;
@@ -182,7 +187,7 @@ function snapshot() {
     difficulty: DIFF, stop_height: STOP < Infinity ? STOP : null, min_bits: MIN_BITS, pay: payAddrs,
     work_update_seconds: REFRESH / 1000, poll_seconds: POLL / 1000, node_warnings: nodeWarnings,
     stratum: { listening: true, connections: stratum.clients.size, subscriptions: [...stratum.clients].filter((c) => c.subscribed).length, hashrate },
-    shares_accepted: { count: stats.shares, diff: stats.shares * DIFF }, shares_rejected: { count: stats.rejected, diff: stats.rejected * DIFF }, blocks_found: stats.blocks,
+    shares_accepted: { count: stats.shares, diff: stats.diff }, shares_rejected: { count: stats.rejected, diff: stats.rejectedDiff }, blocks_found: stats.blocks, vardiff: VARDIFF,
     hashrate: { history, interval_seconds: 60 },
     job: j && {
       job_id: j.id, height: j.height, previous_block: j.prev, bits: j.bits, txn_count: j.template.transactions.length, value_sats: j.template.coinbasevalue,
@@ -191,8 +196,8 @@ function snapshot() {
     },
     coinbaser: j ? j.block.coinbase.outputs.slice(0, j.block.nSplit).map((o, i) => ({ value_sats: o.value, address: scriptToAddress(o.scriptPubKey, k.params.bech32Hrp) ?? o.scriptPubKey, remainder: i === 0 && j.block.nSplit > 1 })) : [],
     clients: [...stratum.clients].map((c) => { const cs = cstat(c); return {
-      remote: c.remote, username: c.user, useragent: c.agent ?? '', subscribed: c.subscribed, difficulty: DIFF, hashrate: rateOf(cs.recent, now),
-      accepted_count: cs.shares, accepted_diff: cs.shares * DIFF, rejected_count: cs.rejected, rejected_diff: cs.rejected * DIFF,
+      remote: c.remote, username: c.user, useragent: c.agent ?? '', subscribed: c.subscribed, difficulty: c.diff, fixed: c.fixedDiff, hashrate: rateOf(cs.recent, now),
+      accepted_count: cs.shares, accepted_diff: cs.diff, rejected_count: cs.rejected, rejected_diff: cs.rejectedDiff,
       last_accepted_seconds: cs.lastShare ? Math.floor((now - cs.lastShare) / 1000) : null, connected_seconds: Math.floor((now - cs.since) / 1000),
     }; }),
     blocks,

@@ -57,7 +57,7 @@ for _ in $(seq 60); do grep -q '^..:..:.. job ' "$WORK/gateway.log" 2>/dev/null 
 grep -q ' job ' "$WORK/gateway.log" || { cat "$WORK/gateway.log"; fail "the gateway published no job"; }
 
 step "sia-test-miner until height $TARGET (up to ${TIMEOUT}s)"
-"$SIA_TEST_MINER" "127.0.0.1:$STRATUM_PORT" "$PAY.rig1" > "$WORK/miner.log" 2>&1 & PIDS+=($!)
+"$SIA_TEST_MINER" "127.0.0.1:$STRATUM_PORT" "$PAY${MINER_USER_SUFFIX:-.rig1}" > "$WORK/miner.log" 2>&1 & PIDS+=($!)
 deadline=$((SECONDS + TIMEOUT)); h=0
 while [ $SECONDS -lt $deadline ]; do h=$(cli getblockcount 2>/dev/null || echo 0); [ "$h" -ge "$TARGET" ] && break; sleep 1; done
 [ "$h" -ge "$TARGET" ] || { tail -20 "$WORK/gateway.log" "$WORK/miner.log"; fail "no block at $TARGET within ${TIMEOUT}s"; }
