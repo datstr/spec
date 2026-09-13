@@ -26,7 +26,7 @@ cli() { "$BITCOIN_CLI" -datadir="$WORK/node" "$@"; }
 cleanup() { s=$?; for p in "${PIDS[@]:-}"; do [ -n "$p" ] && kill "$p" 2>/dev/null || true; done; cli stop >/dev/null 2>&1 || true; sleep 1; if [ $KEEP = 1 ]; then echo "logs kept in $WORK"; else rm -rf "$WORK"; fi; exit $s; }
 trap cleanup EXIT
 port() { python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()'; }
-RPC_PORT=$(port); STRATUM_PORT=$(port)
+RPC_PORT=$(port); STRATUM_PORT=$(port); API_PORT=$(port)
 
 step "regtest node with BLAKE2b active at height $ACTIVATION"
 mkdir -p "$WORK/node"
@@ -52,7 +52,7 @@ TARGET=$((ACTIVATION + BLOCKS))
 
 step "datstr gateway on stratum port $STRATUM_PORT"
 node "$HERE/serve.mjs" --conf "$WORK/node/bitcoin.conf" --network btc:regtest-blake2b --activation $ACTIVATION --headline "datstr e2e headline" \
-  --pay "$PAY" --worker "$WORKER" --port "$STRATUM_PORT" --diff 1 --poll 1 > "$WORK/gateway.log" 2>&1 & PIDS+=($!)
+  --pay "$PAY" --worker "$WORKER" --port "$STRATUM_PORT" --api "$API_PORT" --diff 1 --poll 1 > "$WORK/gateway.log" 2>&1 & PIDS+=($!)
 for _ in $(seq 60); do grep -q '^..:..:.. job ' "$WORK/gateway.log" 2>/dev/null && break; sleep 0.5; done
 grep -q ' job ' "$WORK/gateway.log" || { cat "$WORK/gateway.log"; fail "the gateway published no job"; }
 
@@ -61,6 +61,10 @@ step "sia-test-miner until height $TARGET (up to ${TIMEOUT}s)"
 deadline=$((SECONDS + TIMEOUT)); h=0
 while [ $SECONDS -lt $deadline ]; do h=$(cli getblockcount 2>/dev/null || echo 0); [ "$h" -ge "$TARGET" ] && break; sleep 1; done
 [ "$h" -ge "$TARGET" ] || { tail -20 "$WORK/gateway.log" "$WORK/miner.log"; fail "no block at $TARGET within ${TIMEOUT}s"; }
+
+step "status page"
+curl -sf "http://127.0.0.1:$API_PORT/" | grep -q '<title>datstr gateway' || fail "status page not served"
+curl -sf "http://127.0.0.1:$API_PORT/stats.json" | python3 -c "import json,sys; s=json.load(sys.stdin); print('  stats.json: blocks', s['stats']['blocks'], 'shares', s['stats']['shares'], 'clients', len(s['clients']), 'hashrate %.0f MH/s' % (s['hashrate']/1e6))"
 
 step "checking block $TARGET"
 HASH=$(cli getblockhash "$TARGET")

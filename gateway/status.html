@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>datstr gateway</title>
+<style>
+  :root{--bg:#fff;--fg:#16181d;--mut:#5b6470;--bd:#e6e8eb;--pan:#fafbfc;--ac:#6d28d9;--good:#1a7f37;--bad:#cf222e;--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
+  a{color:#0969da;text-decoration:none}a:hover{text-decoration:underline}
+  .wrap{max-width:1000px;margin:0 auto;padding:0 1.2rem 3rem}
+  nav{border-bottom:1px solid var(--bd)}nav .wrap{display:flex;align-items:center;gap:1rem;height:52px;padding-bottom:0}
+  .brand{font-weight:700;margin-right:auto;color:var(--fg)}.brand b{color:var(--ac)}
+  nav span{color:var(--mut);font:.85rem var(--mono)}
+  h1{font-size:1.5rem;margin:1.6rem 0 .2rem;letter-spacing:-.4px}
+  .sub{color:var(--mut);margin:0 0 1.2rem;font-size:.92rem}
+  .hold{margin:.6rem 0 1rem;padding:.6rem .9rem;border:1px solid #f1d38a;background:#fff8e6;border-radius:8px;font-size:.9rem}
+  .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:.8rem}
+  .tile{border:1px solid var(--bd);border-radius:12px;padding:.8rem 1rem;background:var(--pan)}
+  .tile .k{font:700 .68rem var(--mono);letter-spacing:1.5px;text-transform:uppercase;color:var(--mut)}
+  .tile .v{font:700 1.5rem var(--mono);letter-spacing:-.5px;margin-top:.15rem}.tile .v.good{color:var(--good)}
+  h2{font-size:1.05rem;margin:1.8rem 0 .5rem}
+  table{border-collapse:collapse;width:100%;font-size:.86rem}
+  th,td{border-top:1px solid var(--bd);padding:.45rem .6rem;text-align:left;vertical-align:top}
+  th{color:var(--mut);font-weight:600;font-size:.74rem;text-transform:uppercase;letter-spacing:1px;border-top:none}
+  td.m,span.m{font-family:var(--mono);font-size:.82rem}
+  .ok{color:var(--good);font-weight:700}.no{color:var(--bad);font-weight:700}
+  .empty{color:var(--mut);padding:.6rem 0}
+  .wrapx{overflow-x:auto}
+</style>
+</head>
+<body>
+<nav><div class="wrap"><a class="brand" href="https://datstr.com/">dat<b>·</b>str</a><span id="net">…</span><span id="clock"></span></div></nav>
+<div class="wrap">
+  <h1>gateway</h1>
+  <p class="sub" id="sub">connecting…</p>
+  <div id="hold" class="hold" hidden></div>
+  <div class="tiles">
+    <div class="tile"><div class="k">blocks</div><div class="v good" id="t-blocks">–</div></div>
+    <div class="tile"><div class="k">shares</div><div class="v" id="t-shares">–</div></div>
+    <div class="tile"><div class="k">rejected</div><div class="v" id="t-rejected">–</div></div>
+    <div class="tile"><div class="k">hashrate 10 min</div><div class="v" id="t-hash">–</div></div>
+    <div class="tile"><div class="k">miners</div><div class="v" id="t-clients">–</div></div>
+    <div class="tile"><div class="k">uptime</div><div class="v" id="t-up">–</div></div>
+  </div>
+  <h2>current job</h2>
+  <div class="wrapx"><table><tr><th>height</th><th>prev</th><th>bits</th><th>txs</th><th>value</th><th>age</th><th>commitment</th></tr><tbody id="job"></tbody></table></div>
+  <h2>blocks found</h2>
+  <div class="wrapx"><table><tr><th>height</th><th>hash</th><th>time</th><th>miner</th><th>value</th><th>txs</th><th>node</th></tr><tbody id="blocks"></tbody></table></div>
+  <h2>miners</h2>
+  <div class="wrapx"><table><tr><th>remote</th><th>agent</th><th>user</th><th>shares</th><th>rejected</th><th>last share</th><th>connected</th></tr><tbody id="clients"></tbody></table></div>
+  <p class="sub" style="margin-top:1.6rem">Data: <a id="api" href="stats.json">stats.json</a>, refreshed every 5 s. The datstr <a href="https://datstr.com/spec/">spec</a>.</p>
+</div>
+<script>
+const q = new URLSearchParams(location.search);
+const API = q.get('api') ? q.get('api').replace(/\/$/, '') + '/stats.json' : 'stats.json';
+document.getElementById('api').href = API;
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const btc = (sats) => (sats / 1e8).toFixed(8).replace(/0+$/, '').replace(/\.$/, '');
+const dur = (s) => s < 60 ? s + 's' : s < 3600 ? Math.floor(s / 60) + 'm ' + (s % 60) + 's' : s < 86400 ? Math.floor(s / 3600) + 'h ' + Math.floor(s % 3600 / 60) + 'm' : Math.floor(s / 86400) + 'd ' + Math.floor(s % 86400 / 3600) + 'h';
+const ago = (t) => t ? dur(Math.max(0, Math.floor((Date.now() - t) / 1000))) + ' ago' : '–';
+const hr = (h) => h >= 1e12 ? (h / 1e12).toFixed(2) + ' TH/s' : h >= 1e9 ? (h / 1e9).toFixed(2) + ' GH/s' : h >= 1e6 ? (h / 1e6).toFixed(1) + ' MH/s' : h >= 1e3 ? (h / 1e3).toFixed(0) + ' kH/s' : Math.round(h) + ' H/s';
+const EXPLORER = { 'btc:testnet4-blake2b': 'https://mempool.guide/testnet4', 'btc:mainnet-blake2b': 'https://mempool.guide' };
+async function tick() {
+  let s; try { s = await (await fetch(API, { cache: 'no-store' })).json(); } catch { $('sub').textContent = 'gateway not reachable at ' + API; return; }
+  const ex = EXPLORER[s.network];
+  const link = (kind, id, text) => ex ? `<a href="${ex}/${kind}/${id}" target="_blank" rel="noopener">${text}</a>` : text;
+  $('net').textContent = s.network; $('clock').textContent = new Date().toISOString().slice(11, 19) + ' UTC';
+  $('sub').innerHTML = `stratum diff ${s.difficulty} · paying <span class="m">${s.pay.map(esc).join(', ')}</span> · node <span class="m">${esc(s.node)}</span>${s.stopHeight ? ` · stop at height ${s.stopHeight}` : ''}${s.minBits ? ` · min-difficulty windows only (${s.minBits})` : ''}`;
+  $('hold').hidden = !s.holding; $('hold').textContent = s.holding ? 'holding: ' + s.holding : '';
+  $('t-blocks').textContent = s.stats.blocks; $('t-shares').textContent = s.stats.shares; $('t-rejected').textContent = s.stats.rejected;
+  $('t-hash').textContent = hr(s.hashrate); $('t-clients').textContent = s.clients.length; $('t-up').textContent = dur(s.uptime);
+  $('job').innerHTML = s.job ? `<tr><td class="m">${s.job.height}</td><td class="m">${link('block', s.job.prev, s.job.prev.slice(0, 20) + '…')}</td><td class="m">${s.job.bits}</td><td class="m">${s.job.txs}</td><td class="m">${btc(s.job.value)}</td><td class="m">${dur(s.job.age)}</td><td class="m">${s.job.commitment.slice(0, 16)}…</td></tr>` : '<tr><td colspan="7" class="empty">no job</td></tr>';
+  $('blocks').innerHTML = s.blocks.length ? s.blocks.map((b) => `<tr><td class="m">${b.height}</td><td class="m">${link('block', b.hash, b.hash.slice(0, 24) + '…')}</td><td class="m">${new Date(b.time * 1000).toISOString().slice(0, 19).replace('T', ' ')}</td><td class="m">${esc(b.user)}</td><td class="m">${btc(b.value)}</td><td class="m">${b.txs}</td><td>${b.accepted ? '<span class="ok">accepted</span>' : '<span class="no">' + esc(b.result) + '</span>'}</td></tr>`).join('') : '<tr><td colspan="7" class="empty">none yet</td></tr>';
+  $('clients').innerHTML = s.clients.length ? s.clients.map((c) => `<tr><td class="m">${esc(c.remote)}</td><td class="m">${esc(c.agent)}</td><td class="m">${esc(c.user)}</td><td class="m">${c.shares}</td><td class="m">${c.rejected}</td><td class="m">${ago(c.lastShare)}</td><td class="m">${ago(c.since)}</td></tr>`).join('') : '<tr><td colspan="7" class="empty">no miner connected</td></tr>';
+}
+tick(); setInterval(tick, 5000);
+</script>
+</body>
+</html>
