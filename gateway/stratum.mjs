@@ -23,6 +23,9 @@ export class StratumServer {
     if (this.vardiff) this.timer = setInterval(() => { for (const c of this.clients) if (c.subscribed) this.retarget(c); }, 5000);
   }
   oneSharePerJob(c) { return /^sia-test-miner/.test(c.agent ?? ''); }
+  // The same job under a new id, with the header's spare nonce3 (the high half of the ntime field)
+  // set to the clone number, so a miner that restarts its search from zero finds a new nonce.
+  cloneJob(job) { const n = ++this.clone; const c = { ...job, id: `${job.id}${(n & 0xffff).toString(16).padStart(4, '0')}`, ntimeField: '00000000' + [n & 255, (n >>> 8) & 255, (n >>> 16) & 255, (n >>> 24) & 255].map((b) => b.toString(16).padStart(2, '0')).join('') }; this.jobs.set(c.id, c); return c; }
   targetFor(d) { this.targets ??= new Map(); if (!this.targets.has(d)) { if (this.targets.size > 64) this.targets.clear(); this.targets.set(d, targetForDifficulty(d)); } return this.targets.get(d); }
   listen(port, host = '0.0.0.0') { return new Promise((res) => this.server.listen(port, host, () => res(this.server.address().port))); }
   close() { clearInterval(this.timer); for (const c of this.clients) c.sock.destroy(); this.server.close(); }
@@ -33,7 +36,7 @@ export class StratumServer {
     this.job = job; this.jobs.set(job.id, job);
     for (const c of this.clients) if (c.subscribed) this.notify(c, job, clean);
   }
-  retire(keep = 8) { const ids = [...this.jobs.keys()]; while (ids.length > keep) this.jobs.delete(ids.shift()); }
+  retire(keep = 64) { const ids = [...this.jobs.keys()]; while (ids.length > keep) this.jobs.delete(ids.shift()); }
 
   accept(sock) {
     const addr = sock.remoteAddress ?? '';
@@ -64,7 +67,7 @@ export class StratumServer {
   setDiff(c, d, why) {
     d = Number(d.toPrecision(3)); if (d === c.diff) return;
     const from = c.diff; c.diff = d; this.setDifficulty(c);
-    if (this.job && c.subscribed) { const clone = { ...this.job, id: `${this.job.id}${(++this.clone).toString(16).padStart(2, '0')}` }; this.jobs.set(clone.id, clone); this.notify(c, clone, false); }
+    if (this.job && c.subscribed) this.notify(c, this.cloneJob(this.job), false);
     this.log(`stratum: ${c.remote} difficulty ${from} → ${d} (${why})`);
     c.sharesSince = 0; c.lastRetarget = Date.now();
   }
@@ -120,7 +123,7 @@ export class StratumServer {
           if (r.ok) {
             this.reply(c, id, true); c.sharesSince++; this.retarget(c);
             // a miner that mines one share per job and then waits (ratum's sia-test-miner) gets the same job again under a new id
-            if (this.oneSharePerJob(c) && this.job && !c.sock.destroyed) { const again = { ...this.job, id: `${this.job.id}${(++this.clone).toString(16).padStart(2, '0')}` }; this.jobs.set(again.id, again); this.notify(c, again, false); }
+            if (this.oneSharePerJob(c) && this.job && !c.sock.destroyed) this.notify(c, this.cloneJob(this.job), false);
           } else this.refuse(c, id, r.code ?? 23, r.reason);
         } catch (e) { this.log(`stratum: share error ${e.message}`); this.refuse(c, id, 20, 'internal'); }
         return;
