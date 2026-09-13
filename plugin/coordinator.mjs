@@ -23,7 +23,7 @@ export class Coordinator {
     this.pubkey = pubkeyOf(key);
     this.chain = this.params.chain;
     this.shares = []; this.seen = new Set(); this.masters = new Map(); this.workers = new Map(); this.clients = new Set();
-    this.splits = new Map(); this.blocks = []; this.owed = {}; this.tip = null; this.prevAt = new Map();
+    this.splits = new Map(); this.blocks = []; this.owed = {}; this.tip = null; this.prevAt = new Map(); this.targetAt = new Map();
     this.stats = { shares: 0, rejected: 0, blocks: 0, byCode: {}, refusedConnections: 0, droppedConnections: 0 };
     this.byAddress = new Map();
     this.started = Date.now();
@@ -39,6 +39,17 @@ export class Coordinator {
     for (const b of await lines(`${this.dataDir}/blocks.jsonl`)) this.blocks.unshift(b);
     if (existsSync(`${this.dataDir}/owed.json`)) this.owed = JSON.parse(await readFile(`${this.dataDir}/owed.json`, 'utf8'));
     this.stats.shares = this.shares.length; this.stats.blocks = this.blocks.length;
+    // blocks the node knows that were credited as plain shares (a tip race before targetAt existed): record them
+    const known = new Set(this.blocks.map((b) => b.hash));
+    for (const sh of this.shares.slice(-300)) {
+      if (known.has(sh.hash)) continue;
+      let hdr; try { hdr = await this.rpc('getblockheader', sh.hash); } catch { continue; }
+      const rec = { '@type': 'datstr:BlockRecord', chain: this.chain, height: sh.height, hash: sh.hash, share: sh.id, master: sh.master, coinbase: null, split: sh.split, relay: 'found on chain at start', onChain: hdr.confirmations >= 0, at: sh.at };
+      this.blocks.unshift(rec); this.stats.blocks++; known.add(sh.hash);
+      await appendFile(`${this.dataDir}/blocks.jsonl`, JSON.stringify(rec) + '\n'); await writeFile(`${this.dataDir}/blocks/${sh.hash}.json`, JSON.stringify(rec, null, 1));
+      this.log(`block record backfilled: h${sh.height} ${sh.hash}`);
+    }
+    this.blocks.sort((a, b) => b.height - a.height);
     this.descriptor = signEvent(this.key, { kind: KIND.pool, tags: [['d', this.chain]], content: { chain: this.chain, ...this.params, endpoints: this.params.endpoints ?? {} } });
     await writeFile(`${this.dataDir}/pool.json`, JSON.stringify(this.descriptor, null, 1));
     this.log(`coordinator ${this.pubkey.slice(0, 16)}… on ${this.chain}: ${this.shares.length} shares, ${this.masters.size} masters, ${this.blocks.length} blocks loaded from ${this.dataDir}`);
@@ -52,7 +63,8 @@ export class Coordinator {
     const t = await this.rpc('getblocktemplate', { rules: RULES });
     if (this.tip && this.tip.height === t.height && this.tip.prev === t.previousblockhash) return;
     this.tip = { height: t.height, prev: t.previousblockhash, target: t.target, value: t.coinbasevalue, difficulty: difficultyOf(t.target), bits: t.bits, at: Date.now() };
-    this.prevAt.set(t.height, t.previousblockhash);
+    this.prevAt.set(t.height, t.previousblockhash); this.targetAt.set(t.height, t.target);
+    for (const h of [...this.targetAt.keys()]) if (h < t.height - 16) this.targetAt.delete(h);
     // a moment's delay so the share that found the block is credited before the split for the next height
     clearTimeout(this.splitTimer);
     await new Promise((r) => { this.splitTimer = setTimeout(r, this.params.splitDelayMs); });
@@ -187,7 +199,8 @@ export class Coordinator {
     const weight = difficultyOf(c.target);
     if (weight < this.params.minDifficulty) return fail('difficulty-floor', `${weight} < ${this.params.minDifficulty}`);
     if (this.seen.has(d.blockHash)) return fail('duplicate');
-    const netTarget = c.height === this.tip.height ? this.tip.target : null;
+    // the network target for the share's own height: the tip may already have moved on by the time the share arrives
+    const netTarget = this.targetAt.get(c.height) ?? (c.height === this.tip.height ? this.tip.target : null);
     const isBlock = netTarget ? meets(this.hash.hexToBytes(d.blockHash), this.hash.hexToBytes(netTarget)) : false;
     return { ok: true, weight, master: masterKey, worker: ev.pubkey, hash: d.blockHash, isBlock, height: c.height, coinbaseTxid: cbTxid, splitId: c.split };
   }
