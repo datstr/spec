@@ -306,6 +306,12 @@ if (args.api !== 'false') {
     if (path === '/') { res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }); return res.end(await file('./status.html')); }
     if (path === '/miner') { res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }); return res.end(await file('./miner.html')); }
     if (path === '/miner-core.mjs') { res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', ...cors }); return res.end(await file('./miner-core.mjs')); }
+    // the coordinator's documents, proxied so a page served from this gateway (a phone, a friend) can read them without reaching the coordinator's host
+    if (path.startsWith('/pool/') && pool.url) {
+      const base = pool.url.replace(/^ws/, 'http').replace(/\/ws$/, '');
+      try { const r = await fetch(base + path.slice(5), { headers: { accept: 'application/json' } }); res.writeHead(r.status, { 'content-type': r.headers.get('content-type') ?? 'application/json', ...cors }); return res.end(Buffer.from(await r.arrayBuffer())); }
+      catch (e) { res.writeHead(502, cors); return res.end('coordinator unreachable'); }
+    }
     res.writeHead(404, cors); res.end('not found');
   });
   // stratum over WebSocket at /stratum, for the browser miner: the same server, each socket wrapped to look like a TCP one

@@ -71,7 +71,8 @@ const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<
 const CDN = 'https://cdn.jsdelivr.net/gh/bitcoin-desktop/schema@v0.0.25';
 const CORE = new URL('miner-core.mjs', location.href).href;
 const q = new URLSearchParams(location.search);
-$('url').value = q.get('url') ?? `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/stratum`;
+// the stratum socket lives beside this page, so a gateway behind a path prefix (https://host/datstr/miner) still works
+$('url').value = q.get('url') ?? new URL('stratum', location.href).href.replace(/^http/, 'ws');
 const storedName = localStorage.getItem('datstr.user') ?? '';
 $('user').value = q.get('user') ?? ((storedName && !storedName.includes('.') && storedName.length <= 32) ? storedName : 'tab');
 $('pay').value = q.get('pay') ?? localStorage.getItem('datstr.pay') ?? '';
@@ -127,7 +128,7 @@ function burst(text) {
 (function animate() { const d = earn.target - earn.shown; earn.shown += Math.abs(d) < 0.5 ? d : d * 0.08; $('counter').innerHTML = satsOf(earn.shown) + '<small>sats</small>'; requestAnimationFrame(animate); })();
 async function pollPool() {
   try {
-    if (!earn.poolBase) { const g = await (await fetch(new URL('stats.json', location.href), { cache: 'no-store' })).json(); if (!g.pool?.url) return; earn.poolBase = g.pool.url.replace(/^ws/, 'http').replace(/\/ws$/, ''); }
+    if (!earn.poolBase) { const g = await (await fetch(new URL('stats.json', location.href), { cache: 'no-store' })).json(); if (!g.pool?.url) return; earn.poolBase = new URL('pool', location.href).href; }
     const s = await (await fetch(earn.poolBase + '/stats.json', { cache: 'no-store' })).json();
     const addr = earn.myAddress; if (!addr) return;
     const mine = s.masters.find((m) => m.address === addr);
