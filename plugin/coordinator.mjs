@@ -120,36 +120,46 @@ export class Coordinator {
       try {
         if (m?.type === 'hello') return await this.hello(conn, m);
         if (!conn.master) return conn.send({ type: 'error', error: 'hello first' });
+        if (m?.type === 'register') { const r = await this.register(conn, m); return conn.send(r.error ? { type: 'error', error: r.error } : { type: 'registered', master: r.master, worker: r.worker ?? null }); }
         if (m?.type === 'share') return await this.share(conn, m.event);
         conn.send({ type: 'error', error: `unknown type ${m?.type}` });
       } catch (e) { this.log(`gateway ${conn.remote ?? ''}: ${e.message}`); conn.send({ type: 'error', error: e.message }); }
     });
   }
 
-  async hello(conn, m) {
+  // A gateway registers every identity it mines for: its own at hello, others (clients that brought
+  // an address or a delegation) with `register` on the same socket. Same rules for both.
+  async register(conn, m) {
     const d = m.descriptor;
-    if (!d || d.kind !== KIND.miner || !verifyEvent(d)) return conn.send({ type: 'error', error: 'hello needs a signed miner descriptor (kind 33401)' });
+    if (!d || d.kind !== KIND.miner || !verifyEvent(d)) return { error: 'a signed miner descriptor (kind 33401) is needed' };
     const c = contentOf(d);
     const payout = c?.payout?.[this.chain] ?? c?.payout;
-    if (typeof payout !== 'string' || !/^[0-9a-f]+$/i.test(payout)) return conn.send({ type: 'error', error: 'descriptor has no payout script for this chain' });
+    if (typeof payout !== 'string' || !/^[0-9a-f]+$/i.test(payout)) return { error: 'descriptor has no payout script for this chain' };
     const known = this.masters.get(d.pubkey);
     if (!known || known.descriptor.created_at < d.created_at) {
       this.masters.set(d.pubkey, { pubkey: d.pubkey, payout: payout.toLowerCase(), descriptor: d });
       await appendFile(`${this.dataDir}/masters.jsonl`, JSON.stringify(this.masters.get(d.pubkey)) + '\n');
     }
     // a delegation (kind 33402) signed by the same master names the worker key the gateway signs with
-    const g = m.delegation;
+    const g = m.delegation; let worker = null;
     if (g) {
-      if (g.kind !== KIND.delegation || !verifyEvent(g) || g.pubkey !== d.pubkey) return conn.send({ type: 'error', error: 'delegation must be kind 33402 signed by the descriptor\'s master' });
-      const gc = contentOf(g); const worker = gc?.worker, rule = gc?.chains?.[this.chain];
-      if (!/^[0-9a-f]{64}$/i.test(worker ?? '') || !rule) return conn.send({ type: 'error', error: 'delegation names no worker for this chain' });
+      if (g.kind !== KIND.delegation || !verifyEvent(g) || g.pubkey !== d.pubkey) return { error: 'delegation must be kind 33402 signed by the descriptor\'s master' };
+      const gc = contentOf(g); worker = gc?.worker; const rule = gc?.chains?.[this.chain];
+      if (!/^[0-9a-f]{64}$/i.test(worker ?? '') || !rule) return { error: 'delegation names no worker for this chain' };
       const rec = { worker: worker.toLowerCase(), master: d.pubkey, expires: rule.expires ?? null, delegation: g };
       const old = this.workers.get(rec.worker);
       if (!old || old.delegation.created_at < g.created_at) { this.workers.set(rec.worker, rec); await appendFile(`${this.dataDir}/delegations.jsonl`, JSON.stringify(rec) + '\n'); }
-      conn.worker = rec.worker;
+      worker = rec.worker;
     }
-    conn.master = d.pubkey; conn.agent = m.agent ?? '';
-    this.log(`gateway ${conn.remote ?? ''} hello: master ${d.pubkey.slice(0, 16)}…${conn.worker ? ` worker ${conn.worker.slice(0, 16)}…` : ''} (${conn.agent})`);
+    if (m.type === 'register') this.log(`gateway ${conn.remote ?? ''} registered master ${d.pubkey.slice(0, 16)}…${worker ? ` worker ${worker.slice(0, 16)}…` : ''}`);
+    return { master: d.pubkey, worker };
+  }
+
+  async hello(conn, m) {
+    const r = await this.register(conn, m);
+    if (r.error) return conn.send({ type: 'error', error: r.error });
+    conn.master = r.master; conn.worker = r.worker; conn.agent = m.agent ?? '';
+    this.log(`gateway ${conn.remote ?? ''} hello: master ${r.master.slice(0, 16)}…${r.worker ? ` worker ${r.worker.slice(0, 16)}…` : ''} (${conn.agent})`);
     const split = this.tip && this.splits.get(this.tip.height);
     conn.send({ type: 'welcome', pool: this.descriptor, split: split?.event ?? null });
   }

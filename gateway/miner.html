@@ -33,7 +33,8 @@
 </header>
 <form class="panel" id="form">
   <label>gateway <input id="url"></label>
-  <label>username (address.name) <input id="user" placeholder="tb1p….tab"></label>
+  <label>pay to (address on this chain) <input id="pay" placeholder="tb1p… (blank: the gateway's address)"></label>
+  <label>name <input id="user" placeholder="tab"></label>
   <label>difficulty (blank = vardiff) <input id="diff" placeholder="0.001"></label>
   <label>workers <input id="workers" type="number" min="1" max="64"></label>
   <label>windows only <span style="display:flex;gap:.5rem;align-items:center;text-transform:none;letter-spacing:0;color:var(--fg)"><input id="winonly" type="checkbox" style="width:auto"> sleep unless the job's bits are <input id="minbits" value="1d00ffff" style="width:7rem"></span></label>
@@ -41,6 +42,7 @@
 </form>
 <div class="hero" id="hero"></div>
 <section><h2>Log</h2><pre id="log"></pre></section>
+<div class="panel" id="who" style="margin-top:.75rem"><span class="label">identity</span> <span id="idline" class="motd">not logged in: mining as an address, or as the gateway</span> <span class="motd">· <a href="#" id="loginlink">log in with Nostr</a> to mine as your own master</span></div>
 <footer>Hashing: <code>blake2b.js</code> from <code>bitcoin-desktop/schema@v0.0.25</code> in web workers; the job format is the Sia dialect the gateway serves to hardware. A tab is a stratum client like any ASIC, paid at the address in its username.</footer>
 <script type="module">
 const $ = (id) => document.getElementById(id);
@@ -49,7 +51,30 @@ const CDN = 'https://cdn.jsdelivr.net/gh/bitcoin-desktop/schema@v0.0.25';
 const CORE = new URL('miner-core.mjs', location.href).href;
 const q = new URLSearchParams(location.search);
 $('url').value = q.get('url') ?? `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/stratum`;
-$('user').value = q.get('user') ?? localStorage.getItem('datstr.user') ?? '';
+$('user').value = q.get('user') ?? localStorage.getItem('datstr.user') ?? 'tab';
+$('pay').value = q.get('pay') ?? localStorage.getItem('datstr.pay') ?? '';
+// identity (SPEC 4 and 7): with a Nostr login the tab is its own master; it signs a descriptor with its payout
+// address and a delegation to the worker key the gateway derives for it, via NIP-07 (xlogin provides window.nostr)
+let me = null; // { master } when logged in with Nostr
+const idline = (t, cls) => { $('idline').textContent = t; $('idline').className = cls ?? 'motd'; };
+const showIdentity = () => { if (me) idline(`Nostr master ${me.master.slice(0, 12)}… · paid to ${$('pay').value.trim() || '(enter an address)'} · the gateway holds only a delegated worker key`, 'good'); else idline($('pay').value.trim() ? `mining as address ${$('pay').value.trim().slice(0, 14)}…, paid there` : `not logged in: mining as the gateway's address`); };
+document.addEventListener('xlogin', (e) => { if (e.detail.type === 'nostr') { me = { master: e.detail.id }; showIdentity(); log(`logged in: Nostr ${e.detail.id.slice(0, 16)}…`); if (ws && ws.readyState === 1) identify(); } });
+document.addEventListener('xlogout', () => { me = null; showIdentity(); log('logged out'); });
+$('loginlink').onclick = (e) => { e.preventDefault(); window.xlogin?.login(); };
+$('pay').onchange = showIdentity;
+async function identify() {
+  const pay = $('pay').value.trim();
+  if (!me) return; if (!pay) return log('identity: enter a payout address for this chain, then reconnect', 'i');
+  send({ id: '3', method: 'mining.datstr_worker', params: [me.master, pay] });
+}
+async function signIdentity(worker, chain, payout) {
+  const now = Math.floor(Date.now() / 1000), M = me.master;
+  const descriptor = await window.nostr.signEvent({ kind: 33401, created_at: now, tags: [['d', M], ['chain', chain]], content: JSON.stringify({ chain, payout: { [chain]: payout } }) });
+  const delegation = await window.nostr.signEvent({ kind: 33402, created_at: now, tags: [['d', worker], ['chain', chain], ['p', M]], content: JSON.stringify({ master: M, worker, chains: { [chain]: { expires: null } } }) });
+  send({ id: '4', method: 'mining.datstr_identity', params: [descriptor, delegation] });
+}
+const guest = new URLSearchParams(location.hash.slice(1)).get('guest');
+if (guest) window.addEventListener('load', () => { const t = setInterval(() => { if (window.xlogin?.guestLogin) { clearInterval(t); window.xlogin.guestLogin(guest); } }, 200); });
 // blank username: the gateway's own payout address, which is where a tab's work is credited today
 let gatewayPay = null;
 fetch(new URL('stats.json', location.href), { cache: 'no-store' }).then((r) => r.json()).then((s) => { gatewayPay = s.pay?.[0] ? s.pay[0] + '.tab' : null; if (gatewayPay) $('user').placeholder = gatewayPay; }).catch(() => {});
@@ -114,7 +139,9 @@ function submit(nonce) {
 async function onLine(line) {
   let m; try { m = JSON.parse(line); } catch { return; }
   if (m.id === '1' && Array.isArray(m.result)) { en1 = m.result[1]; en2size = m.result[2]; log(`subscribed: extranonce1 ${en1}, extranonce2 ${en2size} bytes`); return; }
-  if (m.id === '2') { log(m.result === true ? 'authorized' : 'authorize refused: ' + JSON.stringify(m.error), m.result === true ? 'b' : 'i'); return; }
+  if (m.id === '2') { log(m.result === true ? 'authorized' : 'authorize refused: ' + JSON.stringify(m.error), m.result === true ? 'b' : 'i'); if (m.result === true && me) identify(); return; }
+  if (m.id === '3') { if (m.error) return log('identity: ' + (m.error[1] ?? JSON.stringify(m.error)), 'i'); log(`identity: the gateway derives worker ${m.result.worker.slice(0, 12)}… for my master; signing the descriptor and delegation`); signIdentity(m.result.worker, m.result.chain, m.result.payout).catch((e) => log('identity: signing failed: ' + e.message, 'i')); return; }
+  if (m.id === '4') { if (m.error) return log('identity: refused: ' + (m.error[1] ?? JSON.stringify(m.error)), 'i'); log(`identity: mining as master ${m.result.master.slice(0, 12)}…, paid at ${$('pay').value.trim()}`, 'b'); idline(`Nostr master ${m.result.master.slice(0, 12)}… · paid to ${$('pay').value.trim()} · worker ${m.result.worker.slice(0, 12)}… on the gateway`, 'good'); return; }
   if (pending.has(String(m.id))) { pending.delete(String(m.id)); if (m.result === true) { stats.accepted++; log('share accepted', 'b'); } else { stats.rejected++; log('share rejected: ' + (m.error?.[1] ?? JSON.stringify(m.error)), 'i'); } return; }
   const { parseNotify, targetForDifficulty } = await import(CORE);
   if (m.method === 'mining.set_difficulty') { stats.diff = m.params[0]; target = targetForDifficulty(stats.diff); log(`difficulty ${stats.diff}`); if (job) dispatch(); }
@@ -122,13 +149,16 @@ async function onLine(line) {
 }
 function start() {
   const url = $('url').value.trim(), diff = $('diff').value.trim(), n = Math.max(1, Number($('workers').value) || 1);
-  let user = $('user').value.trim();
-  if (!user) { if (!gatewayPay) return log('username needed: an address, optionally .name', 'i'); user = gatewayPay; $('user').value = user; log(`no username given: mining as ${user}, the gateway's payout address`); }
-  localStorage.setItem('datstr.user', user); localStorage.setItem('datstr.diff', diff);
+  const name = $('user').value.trim() || 'tab', pay = $('pay').value.trim();
+  // the stratum username: an address makes the tab its own identity paid there (SPEC 7); with a Nostr login the address goes into the signed descriptor instead
+  const user = (!me && pay) ? `${pay}.${name}` : `${(gatewayPay ?? '').replace(/\.tab$/, '') || 'gateway'}.${name}`;
+  if (!me && !pay) log(`no payout address: mining as the gateway's address`); else if (!me) log(`mining as ${pay}: paid there directly`);
+  localStorage.setItem('datstr.user', name); localStorage.setItem('datstr.pay', pay); localStorage.setItem('datstr.diff', diff);
   ws = new WebSocket(url); ws.binaryType = 'arraybuffer';
   $('status').textContent = 'connecting'; $('status').className = 'chain'; $('go').textContent = 'stop'; $('go').className = 'stop';
   stats.started = Date.now(); stats.hashes = 0; stats.accepted = 0; stats.rejected = 0; windowHashes = [];
   ws.onopen = () => { $('status').textContent = 'mining'; $('status').className = 'chain good'; log('connected to ' + url); send({ id: '1', method: 'mining.subscribe', params: ['datstr-miner-tab'] }); send({ id: '2', method: 'mining.authorize', params: [user, diff ? 'd=' + diff : 'x'] }); startWorkers(n); };
+  showIdentity();
   ws.onmessage = (e) => { const text = typeof e.data === 'string' ? e.data : new TextDecoder().decode(e.data); for (const line of text.split('\n')) if (line.trim()) onLine(line); };
   ws.onclose = () => { log('disconnected', 'i'); stop(false); };
   ws.onerror = () => log('socket error', 'i');
@@ -136,8 +166,9 @@ function start() {
 }
 function stop(closeSocket = true) { stopWorkers(); if (closeSocket && ws) ws.close(); ws = null; job = null; clearInterval(tick); $('status').textContent = 'idle'; $('status').className = 'chain'; $('go').textContent = 'start'; $('go').className = ''; render(); }
 $('form').onsubmit = (e) => { e.preventDefault(); ws ? stop() : start(); };
-render();
-if (q.get('autostart')) start();
+render(); showIdentity();
+if (q.get('autostart')) { const t = setInterval(() => { if (!guest || me) { clearInterval(t); start(); } }, 300); }
 </script>
+<script src="https://unpkg.com/xlogin"></script>
 </body>
 </html>

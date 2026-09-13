@@ -61,8 +61,9 @@ step "two gateways (B delegated), two miners"
 node "$HERE/gateway/serve.mjs" "${COMMON[@]}" --pay $PAY_A --key $KEY_A --port $ST_A --api $API_A --diff 1 --poll 1 --pool "$CO_WS" > "$WORK/gw-a.log" 2>&1 & PIDS+=($!)
 node "$HERE/gateway/serve.mjs" "${COMMON[@]}" --pay $PAY_B --key $KEY_B --port $ST_B --api $API_B --diff 1 --poll 1 --pool "$CO_WS" --descriptor "$WORK/master-b/descriptor.json" --delegation "$WORK/master-b/delegation-${WORKER_B:0:16}.json" > "$WORK/gw-b.log" 2>&1 & PIDS+=($!)
 waitfor "$WORK/gw-a.log" 'pool: welcome' && waitfor "$WORK/gw-b.log" 'pool: welcome' || { tail -5 "$WORK/gw-a.log" "$WORK/gw-b.log" "$WORK/co.log"; fail "gateways did not join the coordinator"; }
-"$SIA_TEST_MINER" 127.0.0.1:$ST_A "$PAY_A.a" > "$WORK/miner-a.log" 2>&1 & PIDS+=($!)
-"$SIA_TEST_MINER" 127.0.0.1:$ST_B "$PAY_B.b" > "$WORK/miner-b.log" 2>&1 & PIDS+=($!)
+# usernames that are not addresses: an address username would make the miner its own identity (SPEC 7)
+"$SIA_TEST_MINER" 127.0.0.1:$ST_A "rig.a" > "$WORK/miner-a.log" 2>&1 & PIDS+=($!)
+"$SIA_TEST_MINER" 127.0.0.1:$ST_B "rig.b" > "$WORK/miner-b.log" 2>&1 & PIDS+=($!)
 
 TARGET=$((ACTIVATION + BLOCKS))
 step "mining until height $TARGET (up to ${TIMEOUT}s)"

@@ -14,8 +14,8 @@ import { targetForDifficulty } from './lib/target.mjs';
 // mining.suggest_difficulty. The difficulty a share is judged at is the one its job was sent
 // at: a change re-sends the current job under a new id, so ids pin difficulties.
 export class StratumServer {
-  constructor({ onShare, difficulty = 1, vardiff = null, log = console.log, maxClients = 1024, maxLineBytes = 16384, maxPerAddress = 64 }) {
-    this.onShare = onShare; this.difficulty = difficulty; this.log = log;
+  constructor({ onShare, onAuthorize = null, onMethod = null, difficulty = 1, vardiff = null, log = console.log, maxClients = 1024, maxLineBytes = 16384, maxPerAddress = 64 }) {
+    this.onShare = onShare; this.onAuthorize = onAuthorize; this.onMethod = onMethod; this.difficulty = difficulty; this.log = log;
     this.maxClients = maxClients; this.maxLineBytes = maxLineBytes; this.maxPerAddress = maxPerAddress; this.refused = 0;
     this.vardiff = vardiff && { targetSeconds: 10, min: 0.0001, max: 1e6, window: 60, ...vardiff };
     this.clients = new Set(); this.job = null; this.jobs = new Map(); this.sid = 0; this.clone = 0;
@@ -57,10 +57,14 @@ export class StratumServer {
   reply(c, id, result) { this.send(c, { id, result, error: null }); }
   refuse(c, id, code, msg) { this.send(c, { id, result: null, error: [code, msg, null] }); }
 
+  // A job may differ per client (its coinbase commits to the client's identity): job.variant(c) says how.
   notify(c, job, clean) {
     c.jobDiff.set(job.id, c.diff); if (c.jobDiff.size > 16) c.jobDiff.delete(c.jobDiff.keys().next().value);
-    this.send(c, { id: null, method: 'mining.notify', params: [job.id, job.prevHidden, job.coinb1, '', [], '', job.bits, job.ntimeField, !!clean] });
+    const v = job.variant ? job.variant(c) : job;
+    this.send(c, { id: null, method: 'mining.notify', params: [job.id, v.prevHidden, v.coinb1, '', [], '', v.bits, job.ntimeField ?? v.ntimeField, !!clean] });
   }
+  // The current job again for one client, under a new id: after its identity changed, its coinbase did too.
+  renotify(c, clean = true) { if (this.job && c.subscribed) this.notify(c, this.cloneJob(this.job), clean); }
   setDifficulty(c) { this.send(c, { id: null, method: 'mining.set_difficulty', params: [c.diff] }); }
   clamp(d) { const v = this.vardiff ?? { min: 1e-6, max: 1e9 }; return Math.min(v.max, Math.max(v.min, Number(d) || this.difficulty)); }
   // A new difficulty takes effect through a re-sent job under a fresh id, so shares for the old id are still judged at the old difficulty.
@@ -103,8 +107,11 @@ export class StratumServer {
         return;
       }
       case 'mining.authorize': {
-        c.user = String(params[0] ?? '').replace(/,d=[^,]*/, ''); this.reply(c, id, true); this.log(`stratum: ${c.remote} authorized ${c.user}`);
+        c.user = String(params[0] ?? '').replace(/,d=[^,]*/, '');
+        try { await this.onAuthorize?.(c, c.user, String(params[1] ?? '')); } catch (e) { this.log(`stratum: ${c.remote} authorize ${c.user}: ${e.message}`); return this.refuse(c, id, 24, e.message); }
+        this.reply(c, id, true); this.log(`stratum: ${c.remote} authorized ${c.user}${c.identity ? ` as ${c.identity.mode} master ${c.identity.master.slice(0, 12)}…` : ''}`);
         const fixed = this.parseFixed(params[0], params[1]); if (fixed) { c.fixedDiff = fixed; this.setDiff(c, fixed, 'fixed by the miner'); }
+        else if (c.identity && this.job) this.renotify(c, true);
         return;
       }
       case 'mining.suggest_difficulty': { const d = this.clamp(Number(params[0])); if (d > 0) { c.fixedDiff = d; this.setDiff(c, d, 'suggested by the miner'); } return this.reply(c, id, true); }
@@ -128,7 +135,10 @@ export class StratumServer {
         } catch (e) { this.log(`stratum: share error ${e.message}`); this.refuse(c, id, 20, 'internal'); }
         return;
       }
-      default: return this.refuse(c, id, 20, `unknown method ${method}`);
+      default: {
+        if (this.onMethod) { try { const r = await this.onMethod(c, method, params); if (r !== undefined) return this.reply(c, id, r); } catch (e) { return this.refuse(c, id, 20, e.message); } }
+        return this.refuse(c, id, 20, `unknown method ${method}`);
+      }
     }
   }
 }

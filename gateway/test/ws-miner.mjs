@@ -3,8 +3,12 @@
 import { SCHEMA } from '../lib/engine.mjs';
 import { workHeader, mine, nonceField, parseNotify, targetForDifficulty, bytesToHex } from '../miner-core.mjs';
 const { blake2b } = await import(`${SCHEMA}/codec/pow/blake2b.js`);
-const [url, user, diffArg, wantArg] = process.argv.slice(2);
+const argv = process.argv.slice(2);
+const opt = (k) => { const i = argv.indexOf(k); return i >= 0 ? argv.splice(i, 2)[1] : null; };
+const MASTER_KEY = opt('--master'), PAY = opt('--pay');
+const [url, user, diffArg, wantArg] = argv;
 const want = Number(wantArg ?? 1);
+const { signEvent, pubkeyOf } = await import('../lib/nostr.mjs');
 const ws = new WebSocket(url); ws.binaryType = 'arraybuffer';
 let en1, job, en2, target, accepted = 0, nextId = 100, hashes = 0, t0 = Date.now(), mining = false;
 const send = (o) => ws.send(JSON.stringify(o) + '\n');
@@ -12,7 +16,15 @@ ws.onopen = () => { send({ id: '1', method: 'mining.subscribe', params: ['ws-min
 ws.onmessage = (e) => { for (const line of new TextDecoder().decode(e.data).split('\n')) if (line.trim()) onLine(JSON.parse(line)); };
 function onLine(m) {
   if (m.id === '1') { en1 = m.result[1]; console.log('subscribed', en1); }
-  else if (m.id === '2') console.log('authorized', m.result);
+  else if (m.id === '2') { console.log('authorized', m.result); if (MASTER_KEY) send({ id: '3', method: 'mining.datstr_worker', params: [pubkeyOf(MASTER_KEY), PAY] }); }
+  else if (m.id === '3') {
+    // the xlogin flow: the gateway names the worker it derives for our master; we sign the descriptor and the delegation
+    const { worker, chain, payout } = m.result; const M = pubkeyOf(MASTER_KEY);
+    const descriptor = signEvent(MASTER_KEY, { kind: 33401, tags: [['d', M], ['chain', chain]], content: { chain, payout: { [chain]: payout } } });
+    const delegation = signEvent(MASTER_KEY, { kind: 33402, tags: [['d', worker], ['chain', chain], ['p', M]], content: { master: M, worker, chains: { [chain]: { expires: null } } } });
+    send({ id: '4', method: 'mining.datstr_identity', params: [descriptor, delegation] });
+  }
+  else if (m.id === '4') console.log('identity', m.error ? 'refused ' + JSON.stringify(m.error) : `master ${m.result.master.slice(0, 12)}… worker ${m.result.worker.slice(0, 12)}… payout ${m.result.payout.slice(0, 12)}…`);
   else if (m.method === 'mining.set_difficulty') { target = targetForDifficulty(m.params[0]); console.log('difficulty', m.params[0]); }
   else if (m.method === 'mining.notify') { job = parseNotify(m.params); console.log('job', job.id); if (!mining) run(); }
   else if (m.result === true) { accepted++; console.log(`share accepted (${accepted}/${want}) after ${hashes} hashes, ${Math.round(hashes / ((Date.now() - t0) / 1000) / 1000)} kH/s`); if (accepted >= want) { ws.close(); process.exit(0); } }

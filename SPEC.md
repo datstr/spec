@@ -187,7 +187,24 @@ The stratum username is a lookup, not an identity. A gateway maps it to a worker
 holds. The conventional `<payout address>.<rig>` form still works: a gateway run by someone
 for miners who bring only an address (a public gateway) creates a worker per address and
 delegates nothing, so that miner is paid at that address and the gateway's own key never
-appears in their shares.
+appears in their shares. The worker key is derived, `taggedHash("datstr/worker", gatewayKey ‖
+"addr:" ‖ chain ‖ ":" ‖ address)`, so a restart derives the same one, and the descriptor it
+signs for itself carries the address's script. A username that is not an address mines as
+the gateway's own identity.
+
+A client with a Nostr key of its own (a browser tab logged in with xlogin, say) can be its
+own master over stratum with two extra methods. `mining.datstr_worker` `[master, address]`
+answers `{ worker, chain, payout }`: the worker pubkey the gateway derives for that master,
+`taggedHash("datstr/worker", gatewayKey ‖ "master:" ‖ chain ‖ ":" ‖ master)`, and the
+address's script. The client signs a miner descriptor (kind 33401) with that payout and a
+delegation (kind 33402) to that worker, and sends both with `mining.datstr_identity`
+`[descriptor, delegation]`. From then on its shares are signed by the derived worker and
+credited to its master, its coinbase commits to that worker, and the coinbase pays its
+address. The gateway registers every such identity with the coordinator over the same
+socket (`register`, section 11.1).
+
+Because the commitment output names the worker, a gateway builds one coinbase per identity
+from the same template, and a client's job changes when its identity does.
 
 **Difficulty is per connection.** Difficulty 1 means a share is expected every 2^32 hashes,
 ratum's convention, and a difficulty's target is 2^224 divided by it, compared big-endian
@@ -398,6 +415,7 @@ A gateway talks to a coordinator over one WebSocket carrying JSON messages, each
 | gateway | `hello` | `descriptor`: the miner descriptor event; `delegation`: the delegation event when the signer is a worker; `agent`: software and version |
 | coordinator | `welcome` | `pool`: the pool descriptor event; `split`: the current split event or null |
 | coordinator | `split` | `event`: a split (section 9.3) |
+| gateway | `register` | `descriptor` and optional `delegation` for another identity the gateway mines for (section 7); answered with `registered` |
 | gateway | `share` | `event`: a share (section 8) |
 | coordinator | `ack` | `event`: an ack (section 8.3) |
 | either | `error` | `error`: text |

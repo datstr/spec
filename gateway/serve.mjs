@@ -43,6 +43,7 @@ import { scriptToAddress } from './lib/address.mjs';
 import { signEvent, randomKey, pubkeyOf, verifyEvent, content as contentOf } from './lib/nostr.mjs';
 import { coinbaseBranches } from './lib/merkle.mjs';
 import { scaleSplit } from './lib/split.mjs';
+import { addressIdentity, delegatedIdentity, workerForMaster } from './lib/identity.mjs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { SCHEMA } from './lib/engine.mjs';
@@ -82,6 +83,23 @@ const MASTER = DESCRIPTOR ? DESCRIPTOR.pubkey : WORKER;
 const MASTER_PAYOUT = DESCRIPTOR ? (contentOf(DESCRIPTOR)?.payout?.[NETWORK] ?? '').toLowerCase() : payScripts[0];
 if (DESCRIPTOR && !MASTER_PAYOUT) throw new Error(`--descriptor has no payout for ${NETWORK}`);
 const descriptor = () => DESCRIPTOR ?? signEvent(KEY, { kind: 33401, tags: [['d', WORKER], ['chain', NETWORK]], content: { chain: NETWORK, payout: { [NETWORK]: payScripts[0] } } });
+// --- identities (SPEC 7): the gateway's own, one per address a client brings, one per delegating master ---
+const gatewayIdentity = { mode: 'gateway', key: KEY, pubkey: WORKER, master: MASTER, payout: MASTER_PAYOUT, address: payAddrs[0], get descriptor() { return descriptor(); }, delegation: DELEGATION };
+const identities = new Map(); // master pubkey → identity, every one the pool has been told about
+function poolRegister(id) { if (id.master === MASTER) return; poolSend({ type: 'register', descriptor: id.descriptor, ...(id.delegation ? { delegation: id.delegation } : {}) }); }
+function identityForAddress(address) {
+  const spk = script.addressToScript(address, k.params); if (!spk) return null;
+  for (const id of identities.values()) if (id.mode === 'address' && id.address === address) return id;
+  const id = addressIdentity({ hash, gatewayKey: KEY, chain: NETWORK, address, payout: spk });
+  identities.set(id.master, id); poolRegister(id); log(`identity: address ${address.slice(0, 14)}… mines as worker ${id.pubkey.slice(0, 12)}…, paid there`);
+  return id;
+}
+function identityForDelegation(desc, deleg) {
+  const id = delegatedIdentity({ hash, gatewayKey: KEY, chain: NETWORK, descriptor: desc, delegation: deleg });
+  const old = identities.get(id.master);
+  if (!old || old.descriptor.created_at < id.descriptor.created_at) { identities.set(id.master, id); poolRegister(id); log(`identity: master ${id.master.slice(0, 12)}… delegated to worker ${id.pubkey.slice(0, 12)}…, paid at its descriptor's script`); }
+  return identities.get(id.master);
+}
 const ackedSeqs = []; // seq of every share the coordinator credited, for the split guard
 let mastersKnown = { at: 0, scripts: new Set() };
 async function knownScripts() {
@@ -93,11 +111,16 @@ function poolConnect() {
   if (!pool.url) return;
   let ws; try { ws = new WebSocket(pool.url); } catch (e) { log(`pool: ${e.message}`); return setTimeout(poolConnect, pool.backoff); }
   pool.ws = ws;
-  ws.onopen = () => { pool.connected = true; pool.backoff = 1000; log(`pool: connected to ${pool.url} as worker ${WORKER.slice(0, 16)}…${DESCRIPTOR ? ` for master ${MASTER.slice(0, 16)}…` : ''}`); ws.send(JSON.stringify({ type: 'hello', descriptor: descriptor(), ...(DELEGATION ? { delegation: DELEGATION } : {}), agent: VERSION })); };
+  ws.onopen = () => { pool.connected = true; pool.backoff = 1000; log(`pool: connected to ${pool.url} as worker ${WORKER.slice(0, 16)}…${DESCRIPTOR ? ` for master ${MASTER.slice(0, 16)}…` : ''}`); ws.send(JSON.stringify({ type: 'hello', descriptor: descriptor(), ...(DELEGATION ? { delegation: DELEGATION } : {}), agent: VERSION })); for (const id of identities.values()) poolRegister(id); };
   ws.onmessage = async (e) => {
     const raw = typeof e.data === 'string' ? e.data : e.data instanceof Blob ? await e.data.text() : Buffer.from(e.data).toString();
     let m; try { m = JSON.parse(raw); } catch { return; }
-    if (m.type === 'welcome') { pool.pubkey = m.pool?.pubkey ?? null; if (m.split) onSplit(m.split); log(`pool: welcome from ${pool.pubkey?.slice(0, 16)}…`); }
+    if (m.type === 'welcome') {
+      pool.pubkey = m.pool?.pubkey ?? null; if (m.split) onSplit(m.split); log(`pool: welcome from ${pool.pubkey?.slice(0, 16)}…`);
+      // never serve a difficulty the pool would refuse: its floor becomes vardiff's floor
+      const floor = Number(contentOf(m.pool)?.minDifficulty);
+      if (floor > 0 && stratum.vardiff && stratum.vardiff.min < floor) { stratum.vardiff.min = floor; log(`pool: minimum difficulty ${floor}, vardiff floor raised to it`); for (const c of stratum.clients) if (c.subscribed && c.diff < floor) stratum.setDiff(c, floor, 'pool minimum'); }
+    }
     else if (m.type === 'split') onSplit(m.event);
     else if (m.type === 'ack') { const c = contentOf(m.event) ?? {}; if (c.result === 'ok') { pool.acked++; if (c.seq) { ackedSeqs.push(c.seq); if (ackedSeqs.length > 10000) ackedSeqs.shift(); } } else pool.refused++; pool.lastAck = c; if (c.result !== 'ok') log(`pool: share refused: ${c.result}${c.detail ? ' (' + c.detail + ')' : ''}`); }
     else if (m.type === 'error') log(`pool: error ${m.error}`);
@@ -144,19 +167,42 @@ const rateOf = (samples, now) => { const cut = now - 600000; while (samples.leng
 function makeJob(t) {
   const sp = pool.connected ? pool.splits.get(t.height) : null;
   const split = sp && sp.outputs.length ? scaleSplit(sp.outputs, t.coinbasevalue) : null;
-  const b = buildBlock({ k, hash, template: t, payScripts, worker: WORKER, split });
-  const d = pow.hashHeaderV2Detailed(b.header);
   const prevHidden = taggedHash('Bitcoin prevblock header, hashed', hexToBytes(t.previousblockhash)); prevHidden.fill(0, 0, 6);
+  const variants = new Map(); // identity pubkey → the block for that identity: the commitment output differs, and solo pays it
+  const build = (id) => {
+    if (!variants.has(id.pubkey)) {
+      const b = buildBlock({ k, hash, template: t, payScripts: [id.payout], worker: id.pubkey, split });
+      const d = pow.hashHeaderV2Detailed(b.header);
+      variants.set(id.pubkey, { identity: id, block: b, header: b.header, coinb1: '000000' + d.h2, prevHidden: bytesToHex(prevHidden), bits: t.bits, ntimeField: '00'.repeat(8), branches: coinbaseBranches([b.cbTxid, ...t.transactions.map((x) => x.txid)]) });
+    }
+    return variants.get(id.pubkey);
+  };
+  const base = build(gatewayIdentity);
   return {
-    id: (++jobSeq).toString(16).padStart(8, '0'), height: t.height, prev: t.previousblockhash, template: t, block: b,
-    prevHidden: bytesToHex(prevHidden), coinb1: '000000' + d.h2, bits: t.bits, ntimeField: '00'.repeat(8),
+    id: (++jobSeq).toString(16).padStart(8, '0'), height: t.height, prev: t.previousblockhash, template: t, block: base.block,
+    prevHidden: base.prevHidden, coinb1: base.coinb1, bits: t.bits, ntimeField: '00'.repeat(8),
     networkTarget: hexToBytes(t.target), made: Date.now(), splitId: split ? sp.id : 'solo',
-    branches: coinbaseBranches([b.cbTxid, ...t.transactions.map((x) => x.txid)]),
+    branches: base.branches, variant: (c) => build(c?.identity ?? gatewayIdentity),
   };
 }
 
-const stratum = new StratumServer({ difficulty: DIFF, vardiff: VARDIFF, log, maxClients: Number(args['max-clients'] ?? 1024), onShare: async ({ job, fields, user, client, diff, target }) => {
-  const header = { ...job.block.header, ...fields };
+const stratum = new StratumServer({ difficulty: DIFF, vardiff: VARDIFF, log, maxClients: Number(args['max-clients'] ?? 1024),
+  // a username that is a payable address makes the client its own identity, paid there (SPEC 7)
+  onAuthorize: async (c, user) => { const addr = user.split('.')[0].trim(); const id = addr ? identityForAddress(addr) : null; if (id) c.identity = id; },
+  // the miner page's identity flow (xlogin): which worker this gateway derives for a master, then the signed descriptor and delegation
+  onMethod: async (c, method, params) => {
+    if (method === 'mining.datstr_worker') {
+      const master = String(params[0] ?? '').toLowerCase(); if (!/^[0-9a-f]{64}$/.test(master)) throw new Error('master pubkey needed');
+      const address = params[1] ? String(params[1]).trim() : null; const payout = address ? script.addressToScript(address, k.params) : null;
+      if (address && !payout) throw new Error(`not an address for ${NETWORK}: ${address}`);
+      return { worker: workerForMaster({ hash, gatewayKey: KEY, chain: NETWORK, master }).pubkey, chain: NETWORK, payout };
+    }
+    if (method === 'mining.datstr_identity') { const id = identityForDelegation(params[0], params[1]); c.identity = id; stratum.renotify(c, true); return { master: id.master, worker: id.pubkey, payout: id.payout }; }
+    return undefined;
+  },
+  onShare: async ({ job, fields, user, client, diff, target }) => {
+  const v = job.variant(client), id = v.identity;
+  const header = { ...v.header, ...fields };
   const d = pow.hashHeaderV2Detailed(header);
   const powBytes = hexToBytes(d.blake2b2), hashBytes = hexToBytes(d.blockHash);
   const cs = cstat(client);
@@ -167,19 +213,19 @@ const stratum = new StratumServer({ difficulty: DIFF, vardiff: VARDIFF, log, max
   const shareTargetHex = bytesToHex(target);
   const isBlock = meets(hashBytes, job.networkTarget);
   const stale = job.prev !== current?.prev;
-  const blockHex = isBlock ? k.codec.encodeHex('Block', { header, transactions: job.block.transactions }) : null;
-  poolSend({ type: 'share', event: signEvent(KEY, { kind: 23400, tags: [['chain', NETWORK], ['h', String(job.height)], ['split', job.splitId]], content: {
-    chain: NETWORK, height: job.height, header: k.codec.encodeHex('BlockHeader', header), coinbase: k.codec.encodeHex('Transaction', job.block.coinbase), branches: job.branches,
+  const blockHex = isBlock ? k.codec.encodeHex('Block', { header, transactions: v.block.transactions }) : null;
+  poolSend({ type: 'share', event: signEvent(id.key, { kind: 23400, tags: [['chain', NETWORK], ['h', String(job.height)], ['split', job.splitId]], content: {
+    chain: NETWORK, height: job.height, header: k.codec.encodeHex('BlockHeader', header), coinbase: k.codec.encodeHex('Transaction', v.block.coinbase), branches: v.branches,
     target: shareTargetHex, split: job.splitId, parents: [], job: job.id, ...(blockHex && job.height <= STOP ? { block: blockHex } : {}),
   } }) });
-  log(`share ${d.blockHash.slice(0, 20)}… job ${job.id} h${job.height} diff ${diff} ${user}${isBlock ? ' BLOCK' : ''}${stale ? ' (stale job)' : ''}${job.splitId === 'solo' ? '' : ' split ' + job.splitId.slice(0, 8)}`);
+  log(`share ${d.blockHash.slice(0, 20)}… job ${job.id} h${job.height} diff ${diff} ${user}${id.mode === 'gateway' ? '' : ` (${id.mode} master ${id.master.slice(0, 8)}…)`}${isBlock ? ' BLOCK' : ''}${stale ? ' (stale job)' : ''}${job.splitId === 'solo' ? '' : ' split ' + job.splitId.slice(0, 8)}`);
   if (isBlock && job.height > STOP) { log(`BLOCK ${d.blockHash} at height ${job.height} NOT submitted: above --stop-height ${STOP}`); return { ok: true }; }
   if (isBlock) {
     const hex = blockHex;
     const r = await rpc('submitblock', hex);
-    blocks.unshift({ height: job.height, hash: d.blockHash, time: Math.floor(Date.now() / 1000), user, coinbase: job.block.cbTxid, commitment: job.block.commitment, value: job.template.coinbasevalue, txs: job.block.transactions.length, accepted: r === null, result: r });
+    blocks.unshift({ height: job.height, hash: d.blockHash, time: Math.floor(Date.now() / 1000), user, master: id.master, coinbase: v.block.cbTxid, commitment: v.block.commitment, value: job.template.coinbasevalue, txs: v.block.transactions.length, accepted: r === null, result: r });
     if (blocks.length > 200) blocks.pop();
-    if (r === null) { stats.blocks++; log(`BLOCK ${d.blockHash} height ${job.height} accepted by the node, coinbase ${job.block.cbTxid}, commitment ${job.block.commitment.slice(0, 16)}…`); await refresh(true); }
+    if (r === null) { stats.blocks++; log(`BLOCK ${d.blockHash} height ${job.height} accepted by the node, coinbase ${v.block.cbTxid}, commitment ${v.block.commitment.slice(0, 16)}…`); await refresh(true); }
     else log(`BLOCK ${d.blockHash} refused by the node: ${r}`);
   }
   return { ok: true };
@@ -223,6 +269,7 @@ function snapshot() {
   const status = holding ? 'Holding' : j ? 'Serving work' : 'No job';
   return {
     version: VERSION, network: NETWORK, node: rpc.url, uptime_seconds: Math.floor((now - started) / 1000), status, holding, worker: WORKER, master: MASTER, delegated: !!DESCRIPTOR,
+    identities: [...identities.values()].map((i) => ({ mode: i.mode, master: i.master, worker: i.pubkey, address: i.address })),
     pool: pool.url ? { url: pool.url, connected: pool.connected, pubkey: pool.pubkey, acked: pool.acked, refused: pool.refused, last: pool.lastAck, split: j?.splitId ?? null } : null,
     difficulty: DIFF, stop_height: STOP < Infinity ? STOP : null, min_bits: MIN_BITS, pay: payAddrs,
     work_update_seconds: REFRESH / 1000, poll_seconds: POLL / 1000, node_warnings: nodeWarnings,
@@ -237,6 +284,7 @@ function snapshot() {
     coinbaser: j ? j.block.coinbase.outputs.slice(0, j.block.nSplit).map((o, i) => ({ value_sats: o.value, address: scriptToAddress(o.scriptPubKey, k.params.bech32Hrp) ?? o.scriptPubKey, remainder: i === 0 && j.block.nSplit > 1 })) : [],
     clients: [...stratum.clients].map((c) => { const cs = cstat(c); return {
       remote: c.remote, username: c.user, useragent: c.agent ?? '', subscribed: c.subscribed, difficulty: c.diff, fixed: c.fixedDiff, hashrate: rateOf(cs.recent, now),
+      identity: c.identity ? { mode: c.identity.mode, master: c.identity.master, worker: c.identity.pubkey, address: c.identity.address } : { mode: 'gateway', master: MASTER, worker: WORKER, address: payAddrs[0] },
       accepted_count: cs.shares, accepted_diff: cs.diff, rejected_count: cs.rejected, rejected_diff: cs.rejectedDiff,
       last_accepted_seconds: cs.lastShare ? Math.floor((now - cs.lastShare) / 1000) : null, connected_seconds: Math.floor((now - cs.since) / 1000),
     }; }),
