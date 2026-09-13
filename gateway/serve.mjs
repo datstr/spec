@@ -28,9 +28,8 @@
 //
 // --stop-height N  never mine a height above N: jobs stop and clients are told nothing new.
 //                  For testnet4 before the 151,200 retarget: --stop-height 151198.
-// --min-bits X     only serve work while the template's bits equal X, i.e. wait for the
-//                  min-difficulty window (testnet4: 1d00ffff, twenty minutes after the tip)
-//                  instead of hashing at the real difficulty in between.
+// --min-bits X     accepted for compatibility; no longer holds work. Miners never idle, so
+//                  holding only made their shares stale. Work is served at every difficulty.
 import { homedir } from 'node:os';
 import http from 'node:http';
 import { readFile } from 'node:fs/promises';
@@ -187,13 +186,18 @@ const stratum = new StratumServer({ difficulty: DIFF, vardiff: VARDIFF, log, max
 } });
 
 let holding = null; // why no work is being served, logged once per reason
+let minBitsNoted = false;
 let awaiting = null; const SPLIT_WAIT = Number(args['split-wait'] ?? 3) * 1000;
 function hold(reason) { if (holding !== reason) { holding = reason; log(`holding: ${reason}`); } stratum.pause(true); }
 
 async function refresh(force) {
   let t; try { t = await rpc('getblocktemplate', { rules: RULES }); } catch (e) { log(`getblocktemplate: ${e.message}`); return; }
   if (t.height > STOP) return hold(`height ${t.height} is above --stop-height ${STOP}`);
-  if (MIN_BITS && t.bits.toLowerCase() !== MIN_BITS) return hold(`bits ${t.bits}, waiting for ${MIN_BITS} (min-difficulty window)`);
+  // --min-bits used to hold work outside a chain's minimum-difficulty window. Miners never idle: they
+  // kept hashing the last job, whose shares were stale the moment the tip moved. Serving the current
+  // tip at whatever difficulty it has costs the same CPU and every share is proof of work on the
+  // real tip, so the flag is now informational only.
+  if (MIN_BITS && !minBitsNoted) { minBitsNoted = true; log(`--min-bits ${MIN_BITS}: noted; work is served at every difficulty, shares stay valid across the hold`); }
   // joined to a coordinator but no split for this height yet: give it a moment before going solo
   if (pool.connected && !pool.splits.get(t.height)) {
     if (awaiting?.height !== t.height) awaiting = { height: t.height, since: Date.now() };

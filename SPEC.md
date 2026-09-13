@@ -200,9 +200,11 @@ by the current job re-sent under a new job id, so a job id names one difficulty 
 is judged at the difficulty its job was sent at. The clock behind vardiff stops while the
 gateway serves no work.
 
-A gateway may serve no work while it waits: for a chain's minimum-difficulty window
-(`minBits`), above a configured `stopHeight`, or for a coordinator's split (section 9.3).
-Miners stay connected and receive the next job when work resumes.
+A gateway may serve no work while it waits: above a configured `stopHeight`, or briefly for
+a coordinator's split (section 9.3). Miners stay connected and receive the next job when
+work resumes. A gateway does not hold work outside a chain's minimum-difficulty window:
+miners never idle, so a hold only makes their shares stale, whereas work on the current tip
+at its real difficulty is proof of work the coordinator credits like any other.
 
 ## 8. Share
 
