@@ -389,7 +389,7 @@ describe. Kinds 33404 and 33405 are reserved for the snapshot and block record a
 
 | path | document | holds |
 |---|---|---|
-| `/pool.json` | pool descriptor, kind 33400, signed by the coordinator | every parameter in section 9 and the endpoints |
+| `/pool.json` | pool descriptor, kind 33400, signed by the coordinator | every parameter in section 9, the anchoring cadence of 11.2 if any, and the endpoints |
 | `/masters.jsonl` | one line per master | pubkey, payout script, the miner descriptor event |
 | `/shares.jsonl` | one line per credited share, in credit order | `seq`, event id, master, weight, height, block hash, split id, time |
 | `/shares/<id>.json` | the share event itself | section 8 |
@@ -426,6 +426,41 @@ backoff, and sends `hello` again. Nothing else is stateful on the wire.
 A coordinator's mount is a [JSS](https://jss.live/) plugin: `activate(api)` registers the
 WebSocket route for gateways, the document routes and the pages, and the plugin directory
 holds the files above. The same core runs standalone on a plain HTTP server.
+
+### 11.2 Track record on the chain: Blocktrails
+
+A coordinator's snapshots are a sequence of states, and the coordinator has a Nostr key.
+[Blocktrails](https://blocktrails.org/) turns exactly that into a history the chain orders:
+each state tweaks the key into a P2TR address (BIP 341, `tagged_hash("TapTweak", P ‖
+sha256(state))`), and spending from one state's address to the next's is the transition.
+The chain of spends is the state history, fixed once mined, and anyone holding the pubkey
+and the states can verify it with nothing but the chain.
+
+A coordinator MAY anchor its ledger this way. The anchored state is the ledger snapshot
+(section 11): its bytes are the state, so the address commits to the split, the window's
+share ids and weights, and the owed balances. Anchoring every snapshot would be a
+transaction per block; a coordinator anchors at a cadence it names in its descriptor,
+`anchorEvery` blocks found or `anchorSeconds`, whichever comes first, and records in each
+block record which anchor covers it. Between anchors the files and the signed events stand,
+as they do without anchoring; an anchor makes the history behind it immutable and any later
+rewrite of those files visible.
+
+What this adds to sections 11 and 16: without an anchor, a coordinator can regenerate its
+files after the fact and a reader cannot tell. With one, a snapshot's hash was on the chain
+before the next block, so a gap, a fork or a rewrite in the trail is evidence. It is the
+reputation object a pool key carries: a trail of anchored ledgers that replay, next to the
+blocks whose coinbases followed them.
+
+Costs and constraints: the coordinator needs a key with a little coin in it, used for
+nothing else, which is the only wallet anywhere in datstr and stays optional. On the
+BLAKE2b chains the spending transaction must use the unified sighash
+(`SIGHASH_ALL | SIGHASH_UNIFIED`, replay protection against Core's chain), which the engine
+does not implement yet; on BTC it is ordinary taproot. The trail's key MAY be the
+coordinator's own Nostr key, as Blocktrails intends, or a key delegated for the purpose.
+
+The same construction serves a miner: a master's payout address is its own P2TR, and a
+Blocktrails profile on that key can anchor its claims (section 14) beside its payouts.
+Neither is specified further here.
 
 ## 12. Levels
 
@@ -501,7 +536,8 @@ Named so that the format leaves room, and otherwise not part of this spec:
 - **Sybil**: identities are free and worthless. Weight is proof of work.
 - **Coordinator dishonesty**: every credit is an ack the gateway keeps, every split
   is in the block, every snapshot is replayable. A dishonest coordinator is
-  provably so, and at level 2 replaceable.
+  provably so, and at level 2 replaceable. A coordinator that anchors its snapshots
+  (11.2) cannot rewrite its history either.
 - **Relay censorship**: relays carry documents, never the ledger's source of truth.
 - **Double-selling claims**: out of scope with the market.
 - **Bad templates**: a gateway's node validates them and applies its policy. A
@@ -537,3 +573,5 @@ Provisional. All in ranges NIP-01 reserves for ephemeral (2xxxx) and addressable
 - [bitcoin-kernel](https://bitcoin-kernel.com/): every rule a verifier applies.
 - [JSS](https://jss.live/): the coordinator's host.
 - [NIP-333](https://nip-333.github.io/): headers over Nostr.
+- [Blocktrails](https://blocktrails.org/): Nostr-native state anchoring on Bitcoin, the
+  optional track record of 11.2.
