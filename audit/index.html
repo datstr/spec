@@ -64,7 +64,9 @@
 
 <script type="module">
 const CDN = 'https://cdn.jsdelivr.net/gh/bitcoin-desktop/schema@v0.0.25';
-const SPLIT_LIB = new URL('../gateway/lib/split.mjs', import.meta.url).href;
+// the split function: from this repository when the page is served from it, else from the coordinator itself
+const onSite = location.host.endsWith('datstr.com') || location.protocol === 'file:';
+const splitLibFor = (base) => onSite ? new URL('../gateway/lib/split.mjs', import.meta.url).href : `${base}/gateway/lib/split.mjs`;
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const num = (n, d) => n == null ? '-' : Number(n).toLocaleString(undefined, d != null ? { maximumFractionDigits: d } : {});
@@ -74,13 +76,13 @@ const tile = (label, big, sub) => `<div class="tile"><div class="label">${label}
 const mark = (ok) => ok === true ? '<span class="good">✓</span>' : ok === false ? '<span class="bad">✗</span>' : '<span class="stale">·</span>';
 const q = new URLSearchParams(location.search);
 const sameOrigin = location.pathname.endsWith('/audit') || location.pathname.endsWith('/audit/index.html') && !location.host.endsWith('datstr.com');
-$('api').value = q.get('api') ?? (location.host.endsWith('datstr.com') || location.protocol === 'file:' ? 'http://127.0.0.1:3400' : location.origin);
+$('api').value = q.get('api') ?? (onSite ? 'http://127.0.0.1:5444/datstr' : location.origin + location.pathname.replace(/\/audit\/?$/, ''));
 $('height').value = q.get('height') ?? '';
 
 let engine;
-async function loadEngine(network) {
+async function loadEngine(network, base) {
   const [{ createKernel }, { knotsBlake2b }, pow, hash, nostr, split] = await Promise.all([
-    import(`${CDN}/codec/kernel.js`), import(`${CDN}/codec/overlays/knots-blake2b.js`), import(`${CDN}/codec/pow/knots-header-v2.js`), import(`${CDN}/codec/hash.js`), import(`${CDN}/codec/nostr.js`), import(SPLIT_LIB)]);
+    import(`${CDN}/codec/kernel.js`), import(`${CDN}/codec/overlays/knots-blake2b.js`), import(`${CDN}/codec/pow/knots-header-v2.js`), import(`${CDN}/codec/hash.js`), import(`${CDN}/codec/nostr.js`), import(splitLibFor(base))]);
   const j = async (p) => (await fetch(`${CDN}/${p}`)).json();
   const overlays = [knotsBlake2b(await j('schema/overlays/knots-blake2b.jsonld'))];
   if (network === 'btc:regtest-blake2b') overlays.push({ graph: { '@graph': [{ '@id': 'btc:regtest-blake2b', '@type': 'btc:NetworkParams', extends: 'btc:regtest', label: 'regtest-blake2b', name: 'regtest-blake2b', powHash: 'knots:blake2b-v2', structVariants: { 'btc:BlockHeader': [{ when: { field: 'version', bit: 31 }, struct: 'knots:BlockHeaderV2' }] }, blake2bHeight: 0, rdtsExpiryTime: 4102444800 }] } });
@@ -102,7 +104,7 @@ async function replay(base, height) {
   const stats = JSON.parse(await get('stats.json'));
   if (!height) height = stats.blocks?.[0]?.height ?? stats.tip?.height; $('height').value = height;
   const pool = JSON.parse(await get('pool.json')); const params = JSON.parse(pool.content);
-  const { k, pow, hash, nostr, split: S } = engine?.network === params.chain ? engine : (engine = { network: params.chain, ...(await loadEngine(params.chain)) });
+  const { k, pow, hash, nostr, split: S } = engine?.network === params.chain ? engine : (engine = { network: params.chain, ...(await loadEngine(params.chain, base)) });
   check('pool descriptor signed by the coordinator', nostr.verifyNostrEvent(pool), `${pool.pubkey.slice(0, 16)}… · ${params.chain}`);
   const masters = new Map(lines(await get('masters.jsonl')).map((m) => [m.pubkey, m]));
   let goodDesc = 0; for (const m of masters.values()) if (nostr.verifyNostrEvent(m.descriptor)) goodDesc++;

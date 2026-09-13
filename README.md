@@ -25,6 +25,7 @@ plugin/     the coordinator (SPEC 8 to 11): verifies shares, keeps the window, d
   coordinator.mjs  the core, transport-agnostic
   standalone.mjs   node:http plus the engine's WebSocket server; documents at /, gateways at /ws
   index.mjs        the same as a JSS plugin: jss start --plugin plugin/index.mjs@/datstr
+                   (config from DATSTR_CONF, DATSTR_NETWORK, DATSTR_DATA, DATSTR_PARAMS; jss 0.0.219+)
   test/regtest.sh  SPEC section 13: two gateways, one coordinator, replay, solo fallback, rejoin
 audit/      replay.mjs recomputes a ledger snapshot from the shares and compares it byte for byte;
             index.html does the same in a browser, with every share verified by the engine

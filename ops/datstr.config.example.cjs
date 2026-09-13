@@ -17,6 +17,8 @@ const gateway = (name, addr, port, api, keyFile) => base(name, {
     '--diff', '0.05', '--vardiff-min', '0.001', '--poll', '1', '--stop-height', '151198', '--min-bits', '1d00ffff', '--pool', 'ws://127.0.0.1:3400/ws'],
 });
 module.exports = { apps: [
+  // Either run the coordinator standalone (this entry) or mount plugin/index.mjs into a JSS
+  // (jspod: --plugin .../plugin/index.mjs@/datstr with DATSTR_* env) and point --pool at it.
   base('datstr-coordinator', { script: 'plugin/standalone.mjs', args: ['--conf', CONF, '--network', NETWORK, '--data', `${HOME}/knots-testnet4/datstr-coordinator`, '--port', '3400', '--min-difficulty', '0.001', '--window-multiple', '0', '--window-min-weight', '4'] }),
   gateway('datstr-gateway-a', ADDR[0], 3333, 3334, `${HOME}/.datstr/btc-testnet4-blake2b.key`),
   // B mines for a cold master key: gateway/delegate.mjs made the descriptor and delegation off the gateway
