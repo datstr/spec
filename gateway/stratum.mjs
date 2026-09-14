@@ -78,6 +78,12 @@ export class StratumServer {
   }
   // While the gateway serves no work (holding), the clock stops: no shares are expected.
   pause(on) { if (on === this.paused) return; this.paused = on; const now = Date.now(); for (const c of this.clients) { c.lastRetarget = now; c.sharesSince = 0; } }
+  // an ASIC on a CPU-sized target submits thousands of shares a second: raise it at once, above any assignment
+  floodGuard(c) {
+    const now = Date.now(); c.flood ??= { t: now, n: 0 };
+    if (now - c.flood.t >= 1000) { c.flood.t = now; c.flood.n = 0; }
+    if (++c.flood.n > 100) { c.flood.n = 0; c.fixedDiff = null; this.setDiff(c, this.clamp(c.diff * 64), 'flood: over 100 shares a second'); c.floodDiff = c.diff; }
+  }
   retarget(c) {
     const v = this.vardiff; if (!v || c.fixedDiff || this.paused) return;
     const now = Date.now(), elapsed = (now - c.lastRetarget) / 1000;
@@ -129,7 +135,7 @@ export class StratumServer {
         try {
           const r = await this.onShare({ job, fields, user: c.user || user, client: c, diff, target });
           if (r.ok) {
-            this.reply(c, id, true); c.sharesSince++; this.retarget(c);
+            this.reply(c, id, true); c.sharesSince++; this.floodGuard(c); this.retarget(c);
             // a miner that mines one share per job and then waits (ratum's sia-test-miner) gets the same job again under a new id
             if (this.oneSharePerJob(c) && this.job && !c.sock.destroyed) this.notify(c, this.cloneJob(this.job), false);
           } else this.refuse(c, id, r.code ?? 23, r.reason);

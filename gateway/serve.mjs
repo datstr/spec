@@ -90,7 +90,7 @@ const identities = new Map(); // master pubkey → identity, every one the pool 
 // SPEC 8.4: the pool's assignment per master fixes the target its shares are judged and weighed at
 const assignments = new Map(); // master pubkey → { id, target, targetBytes, diff, from }
 const masterOf = (c) => c.identity?.master ?? MASTER;
-function applyAssignment(c) { const a = assignments.get(masterOf(c)); if (a && c.subscribed && c.diff !== a.diff) { c.fixedDiff = a.diff; stratum.setDiff(c, a.diff, 'pool assignment'); } }
+function applyAssignment(c) { const a = assignments.get(masterOf(c)); if (!a || !c.subscribed) return; const d = Math.max(a.diff, c.floodDiff ?? 0); if (c.diff !== d) { c.fixedDiff = d; stratum.setDiff(c, d, c.floodDiff && c.floodDiff > a.diff ? 'flood level above the pool assignment' : 'pool assignment'); } }
 function onAssignment(ev) {
   if (!ev || ev.kind !== 23402 || !verifyEvent(ev) || (pool.pubkey && ev.pubkey !== pool.pubkey)) return log('pool: assignment with a bad signature ignored');
   const c = contentOf(ev); if (!c || c.chain !== NETWORK || !/^[0-9a-f]{64}$/i.test(c.target ?? '') || !/^[0-9a-f]{64}$/i.test(c.master ?? '')) return log('pool: malformed assignment ignored');
@@ -235,8 +235,8 @@ const stratum = new StratumServer({ difficulty: DIFF, vardiff: VARDIFF, log, max
   const a = job.splitId === 'solo' ? null : assignments.get(id.master);
   // at most 50 forwarded shares a second per identity: an ASIC landing on a CPU target floods until the pool's vardiff catches up
   const bucket = (id.forward ??= { t: Date.now(), n: 0 }); const nowMs = Date.now(); if (nowMs - bucket.t >= 1000) { bucket.t = nowMs; bucket.n = 0; }
-  const throttled = a && ++bucket.n > 50;
-  const forward = job.splitId === 'solo' || (a && a.from <= job.height && meets(powBytes, a.targetBytes) && !throttled);
+  const throttled = ++bucket.n > 50;
+  const forward = !throttled && (job.splitId === 'solo' || (a && a.from <= job.height && meets(powBytes, a.targetBytes)));
   if (forward) poolSend({ type: 'share', event: signEvent(id.key, { kind: 23400, tags: [['chain', NETWORK], ['h', String(job.height)], ['split', job.splitId]], content: {
     chain: NETWORK, height: job.height, header: k.codec.encodeHex('BlockHeader', header), coinbase: k.codec.encodeHex('Transaction', v.block.coinbase), branches: v.branches,
     target: a ? a.target : bytesToHex(target), ...(a ? { assignment: a.id } : {}), split: job.splitId, parents: [], job: job.id, ...(blockHex && job.height <= STOP ? { block: blockHex } : {}),

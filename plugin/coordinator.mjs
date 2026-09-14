@@ -32,7 +32,7 @@ export class Coordinator {
     this.chain = this.params.chain;
     this.shares = []; this.seen = new Set(); this.masters = new Map(); this.workers = new Map(); this.clients = new Set();
     this.splits = new Map(); this.blocks = []; this.owed = {}; this.tip = null; this.prevAt = new Map(); this.targetAt = new Map();
-    this.assignments = new Map(); this.assignmentsByMaster = new Map(); this.lastRetarget = 0;
+    this.assignments = new Map(); this.assignmentsByMaster = new Map(); this.lastRetarget = 0; this.recentReceipts = [];
     this.stats = { shares: 0, receipts: 0, rejected: 0, blocks: 0, byCode: {}, refusedConnections: 0, droppedConnections: 0 };
     this.paid = new Map(); // address → sats paid on chain, from block records and their snapshots
     this.byAddress = new Map();
@@ -154,6 +154,7 @@ export class Coordinator {
       const cur = this.currentAssignment(master); if (!cur) continue;
       const since = now - cur.at; let n = 0;
       for (let i = this.shares.length - 1; i >= 0 && this.shares[i].at >= cur.at; i--) if (this.shares[i].master === master) n++;
+      for (let i = this.recentReceipts.length - 1; i >= 0 && this.recentReceipts[i].at >= cur.at; i--) if (this.recentReceipts[i].master === master) n++; // receipts prove the rate too
       const d0 = difficultyOf(cur.target); let d;
       if (d0 >= maxD) d = Math.min(maxD, 1000);                              // a runaway: back to a level any ASIC produces shares at within a minute
       else if (n >= 200 && since >= 5) d = d0 * p.vardiffSeconds * n / since; // a flood: go straight to the measured rate
@@ -317,7 +318,7 @@ export class Coordinator {
     }
     if (r.splitId === 'solo') { // a receipt: verified, kept, never in the window
       const rec = { id: ev.id, master: r.master, worker: r.worker, height: r.height, hash: r.hash, at: Math.floor(Date.now() / 1000) };
-      this.seen.add(r.hash); this.stats.receipts++;
+      this.seen.add(r.hash); this.stats.receipts++; this.recentReceipts.push({ master: r.master, at: rec.at }); if (this.recentReceipts.length > 5000) this.recentReceipts.splice(0, 1000);
       await appendFile(`${this.dataDir}/receipts.jsonl`, JSON.stringify(rec) + '\n');
       await writeFile(`${this.dataDir}/shares/${ev.id}.json`, JSON.stringify(ev));
       conn.send({ type: 'ack', event: signEvent(this.key, { kind: KIND.ack, tags: [['e', ev.id]], content: { share: ev.id, result: 'ok', weight: 0, seq: null, receipt: true } }) });
