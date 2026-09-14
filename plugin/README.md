@@ -76,7 +76,7 @@ All in the pool descriptor (`/pool.json`), signed by the coordinator's key.
 | `poll` | 1 | seconds between template polls |
 | `maxConnections`, `maxPerAddress` | 256, 16 | gateway sockets in all and per remote address |
 | `maxMessageBytes` | 4 MiB | largest message accepted (a share carrying a full block fits) |
-| `maxMessagesPerSecond` | 20 | per connection, with a burst of twice that; over it the socket is dropped |
+| `maxMessagesPerSecond` | 200 | per connection, with a burst of twice that; over it the socket is dropped |
 | `helloTimeoutMs` | 15000 | a socket that sends no hello in this time is dropped |
 
 ## What it serves
