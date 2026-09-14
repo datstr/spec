@@ -233,13 +233,16 @@ const stratum = new StratumServer({ difficulty: DIFF, vardiff: VARDIFF, log, max
   // pooled work is judged at the pool's assignment for this master, whatever the local difficulty:
   // a hash above that target is a local receipt only; a solo share carries the local target and weighs nothing
   const a = job.splitId === 'solo' ? null : assignments.get(id.master);
-  const forward = job.splitId === 'solo' || (a && a.from <= job.height && meets(powBytes, a.targetBytes));
+  // at most 50 forwarded shares a second per identity: an ASIC landing on a CPU target floods until the pool's vardiff catches up
+  const bucket = (id.forward ??= { t: Date.now(), n: 0 }); const nowMs = Date.now(); if (nowMs - bucket.t >= 1000) { bucket.t = nowMs; bucket.n = 0; }
+  const throttled = a && ++bucket.n > 50;
+  const forward = job.splitId === 'solo' || (a && a.from <= job.height && meets(powBytes, a.targetBytes) && !throttled);
   if (forward) poolSend({ type: 'share', event: signEvent(id.key, { kind: 23400, tags: [['chain', NETWORK], ['h', String(job.height)], ['split', job.splitId]], content: {
     chain: NETWORK, height: job.height, header: k.codec.encodeHex('BlockHeader', header), coinbase: k.codec.encodeHex('Transaction', v.block.coinbase), branches: v.branches,
     target: a ? a.target : bytesToHex(target), ...(a ? { assignment: a.id } : {}), split: job.splitId, parents: [], job: job.id, ...(blockHex && job.height <= STOP ? { block: blockHex } : {}),
   } }) });
   else { cs.local = (cs.local ?? 0) + 1; stats.local = (stats.local ?? 0) + 1; }
-  log(`share ${d.blockHash.slice(0, 20)}… job ${job.id} h${job.height} diff ${diff} ${user}${id.mode === 'gateway' ? '' : ` (${id.mode} master ${id.master.slice(0, 8)}…)`}${isBlock ? ' BLOCK' : ''}${stale ? ' (stale job)' : ''}${job.splitId === 'solo' ? '' : ' split ' + job.splitId.slice(0, 8)}${forward ? '' : a ? ' (local: above the assignment target)' : ' (local: no assignment yet)'}`);
+  log(`share ${d.blockHash.slice(0, 20)}… job ${job.id} h${job.height} diff ${diff} ${user}${id.mode === 'gateway' ? '' : ` (${id.mode} master ${id.master.slice(0, 8)}…)`}${isBlock ? ' BLOCK' : ''}${stale ? ' (stale job)' : ''}${job.splitId === 'solo' ? '' : ' split ' + job.splitId.slice(0, 8)}${forward ? '' : throttled ? ' (local: throttled)' : a ? ' (local: above the assignment target)' : ' (local: no assignment yet)'}`);
   if (isBlock && job.height > STOP) { log(`BLOCK ${d.blockHash} at height ${job.height} NOT submitted: above --stop-height ${STOP}`); return { ok: true }; }
   if (isBlock) {
     const hex = blockHex;

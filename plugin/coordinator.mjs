@@ -20,7 +20,7 @@ const ledger = ({ id, name, description, currency, entries, extra = {} }) => {
 const didOf = (pubkey) => `did:nostr:${pubkey}`;
 export const KIND = { share: 23400, ack: 23401, assignment: 23402, split: 23403, pool: 33400, miner: 33401, delegation: 33402, snapshot: 33404, block: 33405 };
 const RULES = ['segwit', 'blake2b'];
-const DEFAULTS = { feeBps: 0, feeScript: null, windowMultiple: 2, windowMinWeight: 0, minDifficulty: 1, startDifficulty: 1, vardiffSeconds: 10, assignmentGrace: 120, minPayout: 546, maxOutputs: 512, staleDepth: 3, splitGrace: 30, poll: 1, splitDelayMs: 500,
+const DEFAULTS = { feeBps: 0, feeScript: null, windowMultiple: 2, windowMinWeight: 0, minDifficulty: 1, startDifficulty: 1, vardiffSeconds: 10, assignmentGrace: 120, maxDifficulty: 1e8, minPayout: 546, maxOutputs: 512, staleDepth: 3, splitGrace: 30, poll: 1, splitDelayMs: 500,
   // socket hygiene: connections in all and per remote address, bytes per message, messages per second per connection (burst is twice that)
   maxConnections: 256, maxPerAddress: 16, maxMessageBytes: 4 * 1024 * 1024, maxMessagesPerSecond: 200, helloTimeoutMs: 15000 };
 
@@ -143,22 +143,24 @@ export class Coordinator {
     this.log(`assignment for ${master.slice(0, 12)}…: difficulty ${difficultyOf(target)} from h${from} (${why})`);
     return rec;
   }
-  // northbound vardiff: aim at one credited share per vardiffSeconds for every connected master
+  // northbound vardiff: aim at one credited share per vardiffSeconds for every connected master,
+  // measured on the shares credited since the master's current assignment
   async retargetAssignments() {
     const now = Math.floor(Date.now() / 1000);
     if (now - this.lastRetarget < 10) return; this.lastRetarget = now;
-    const window = 120, cut = now - window, counts = new Map();
-    for (let i = this.shares.length - 1; i >= 0 && this.shares[i].at >= cut; i--) counts.set(this.shares[i].master, (counts.get(this.shares[i].master) ?? 0) + 1);
+    const p = this.params, maxD = p.maxDifficulty ?? 1e8;
     const connected = new Set(); for (const c of this.clients) for (const m of c.identities ?? []) connected.add(m);
     for (const master of connected) {
       const cur = this.currentAssignment(master); if (!cur) continue;
-      const n = counts.get(master) ?? 0, since = Math.min(window, now - cur.at);
-      if (now - cur.at < 60 && n < 200) continue; // a minute between steps, unless a flood says otherwise
-      if (n < 8 && since < window) continue;
-      const d0 = difficultyOf(cur.target); let d = d0 * this.params.vardiffSeconds / (since / Math.max(n, 0.5));
-      // a step of at most 4x, except when the rate is wildly off (an ASIC landing on a CPU target): then go straight there
-      if (d / d0 < 16) d = Math.min(d0 * 4, Math.max(d0 / 4, d));
-      d = Math.max(this.params.minDifficulty, Number(d.toPrecision(3)));
+      const since = now - cur.at; let n = 0;
+      for (let i = this.shares.length - 1; i >= 0 && this.shares[i].at >= cur.at; i--) if (this.shares[i].master === master) n++;
+      const d0 = difficultyOf(cur.target); let d;
+      if (d0 > maxD) d = maxD;                                              // a runaway or a bad start: back to the ceiling
+      else if (n >= 200 && since >= 5) d = d0 * p.vardiffSeconds * n / since; // a flood: go straight to the measured rate
+      else if (since < 60) continue;                                         // otherwise one step a minute
+      else if (n === 0) d = since >= 120 ? d0 / 64 : d0;                    // nothing for two minutes: come down fast
+      else d = d0 * p.vardiffSeconds * n / since;
+      d = Math.min(d0 * 256, Math.max(d0 / 64, d)); d = Math.min(maxD, Math.max(p.minDifficulty, Number(d.toPrecision(3))));
       if (d / d0 > 1.4 || d / d0 < 0.7) await this.issueAssignment(master, d, `${n} shares in ${since} s`);
     }
   }
