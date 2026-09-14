@@ -302,6 +302,7 @@ if (args.api !== 'false') {
   const server = http.createServer(async (req, res) => {
     const path = req.url.split('?')[0];
     const cors = { 'access-control-allow-origin': '*' };
+    if (req.method === 'OPTIONS') { res.writeHead(204, { ...cors, 'access-control-allow-headers': 'range', 'access-control-allow-methods': 'GET, HEAD, OPTIONS' }); return res.end(); }
     if (path === '/stats.json') { res.writeHead(200, { 'content-type': 'application/json', ...cors }); return res.end(JSON.stringify(snapshot())); }
     if (path === '/') { res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }); return res.end(await file('./status.html')); }
     if (path === '/miner') {
@@ -310,6 +311,19 @@ if (args.api !== 'false') {
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }); return res.end((await file('./miner.html')).replace('{{URL}}', `${proto}://${host}${prefix}/miner`));
     }
     if (path === '/miner-core.mjs') { res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', ...cors }); return res.end(await file('./miner-core.mjs')); }
+    // large files this gateway offers (UTXO snapshots for the chain), with Range requests for webseeds: --files <dir>
+    if (path.startsWith('/snapshots/') && args.files) {
+      const name = path.slice(11); if (!/^[A-Za-z0-9._-]+$/.test(name)) { res.writeHead(404, cors); return res.end('not found'); }
+      const fp = `${args.files.replace(/^~/, homedir())}/${name}`;
+      let st; try { st = (await import('node:fs/promises')).stat(fp); st = await st; } catch { res.writeHead(404, cors); return res.end('not found'); }
+      const type = name.endsWith('.json') ? 'application/json' : name.endsWith('.torrent') ? 'application/x-bittorrent' : 'application/octet-stream';
+      const range = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range ?? '');
+      let start = 0, end = st.size - 1;
+      if (range) { if (range[1]) start = Number(range[1]); if (range[2]) end = Number(range[2]); if (!range[1] && range[2]) { start = st.size - Number(range[2]); end = st.size - 1; } if (start > end || end >= st.size) { res.writeHead(416, { 'content-range': `bytes */${st.size}`, ...cors }); return res.end(); } }
+      res.writeHead(range ? 206 : 200, { 'content-type': type, 'content-length': end - start + 1, 'accept-ranges': 'bytes', ...(range ? { 'content-range': `bytes ${start}-${end}/${st.size}` } : {}), 'access-control-allow-headers': 'range', 'access-control-expose-headers': 'content-range, content-length, accept-ranges', ...cors });
+      if (req.method === 'HEAD') return res.end();
+      const { createReadStream } = await import('node:fs'); return createReadStream(fp, { start, end }).pipe(res);
+    }
     // the coordinator's documents, proxied so a page served from this gateway (a phone, a friend) can read them without reaching the coordinator's host
     if (path.startsWith('/pool/') && pool.url) {
       const base = pool.url.replace(/^ws/, 'http').replace(/\/ws$/, '');
