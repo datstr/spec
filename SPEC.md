@@ -274,11 +274,16 @@ named code otherwise:
     `minDifficulty`.
 13. `duplicate`: the block hash has not been credited before.
 
-A share whose masked hash also meets the network target is a **block**. The gateway has
-already submitted it to its own node before signing the share, and the share carries the
-full block so the verifier submits it to its own node as well, then records a block document
-(section 11). A block at a height whose split the verifier holds applies that split's owed
-balances (section 9.2).
+A share is a **block** when its header is a valid next block header of the chain at its
+height: the chain's header rules pass on it, proof of work against the network target
+included. A verifier with a template may compare the masked hash with the template's
+target, which is the same test. The gateway has already submitted the block to its own
+node before signing the share, and the share carries the full block so a verifier with a
+node submits it as well; a verifier without one records the block and learns from the
+chain it follows whether the block is on it. Either way the verifier records a block
+document (section 11) whose `relay` field says what it did. A block at a height whose
+split the verifier holds applies that split's owed balances (section 9.2) once the block
+is on the chain.
 
 ### 8.2 Weight
 
@@ -338,8 +343,9 @@ list of outputs a coinbase must pay.
 
 The window is the most recent credited shares, in credit order, whose weights sum to at
 least `need = max(windowMultiple × D, windowMinWeight)`, oldest dropped first, where `D` is
-the network difficulty of the coordinator's current template in the same units as share
-weight. When fewer shares exist than `need`, the window is every share. A share leaves the
+the network difficulty of the next block in the same units as share weight (8.2): the
+target of the coordinator's template when it has one, else the target the chain's rules
+require after its tip. When fewer shares exist than `need`, the window is every share. A share leaves the
 window by weight, not by time, so a miner's expected reward does not depend on when the
 block lands.
 
@@ -350,21 +356,30 @@ meaningless and the descriptor sets `windowMultiple` to 0 and sizes the window w
 
 ### 9.2 Outputs
 
-For a template of value `V` (subsidy plus fees, as the gateway's own template
-reports it), the split is computed as:
+For a value `V`, which is the coordinator's template value (subsidy plus fees) when it has
+a template and the block subsidy at the height otherwise, the split is computed as
+follows. `V` fixes the proportions and the rounding only: the gateway scales the outputs
+to its own template value (9.3) and the verifier recomputes that scaling from the
+coinbase's own sum, so the list a coinbase pays does not depend on `V`.
 
 1. Group the window's shares by the master key their worker was delegated to when
    each was credited. Sum weights per master, `w_i`, and the total `W`.
 2. `fee = V × feeBps / 10000` to the pool descriptor's fee script. Zero by default.
    `R = V − fee`.
-3. `pay_i = floor(R × w_i / W)`.
-4. Drop every `pay_i` below `minPayout`. Redistribute their sum over the remaining
-   masters in the same proportion, once. Their weight stays in the window.
-5. Order by `pay_i` descending, then by master pubkey ascending. Keep the first
-   `maxOutputs` (512). Every master beyond that is
-   **owed** `pay_i` and is paid first from the next block, before the window split,
-   until cleared.
-6. Rounding dust goes to the first output.
+3. **Owed first.** For each master with an owed balance, in ascending pubkey order,
+   `pay = min(owed, R)`; if `pay` is at least `minPayout` it becomes an output of its own,
+   `R` falls by it and the owed balance by it; otherwise nothing is paid and the balance
+   stays. Stop when `R` is zero.
+4. `pay_i = floor(R × w_i / W)` for the window's masters.
+5. Drop every `pay_i` below `minPayout`. Redistribute their sum over the remaining
+   masters in proportion to weight, once, floored. Their weight stays in the window. If no
+   master remains, the window pays nothing.
+6. Order the window outputs by `pay_i` descending, then by master pubkey ascending. Keep
+   the first `maxOutputs` (512) minus the owed outputs already made. Every master beyond
+   that becomes **owed** `pay_i`, added to any balance it has.
+7. Rounding dust, what `R` still exceeds the outputs by, goes to the first window output,
+   or to the first owed output when the window pays none.
+8. The fee, if any, is the last output. The list is owed outputs, window outputs, fee.
 
 Owed balances change only when a block uses a split: the split's "owed after" becomes the
 pool's owed state when a block at that height is credited, not when the split is issued, so
