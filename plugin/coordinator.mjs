@@ -155,7 +155,7 @@ export class Coordinator {
       const since = now - cur.at; let n = 0;
       for (let i = this.shares.length - 1; i >= 0 && this.shares[i].at >= cur.at; i--) if (this.shares[i].master === master) n++;
       const d0 = difficultyOf(cur.target); let d;
-      if (d0 > maxD) d = Math.min(maxD, 1000);                              // a runaway: back to a level any ASIC produces shares at within a minute
+      if (d0 >= maxD) d = Math.min(maxD, 1000);                              // a runaway: back to a level any ASIC produces shares at within a minute
       else if (n >= 200 && since >= 5) d = d0 * p.vardiffSeconds * n / since; // a flood: go straight to the measured rate
       else if (since < 60) continue;                                         // otherwise one step a minute
       else if (n === 0) d = since >= 120 ? d0 / 64 : d0;                    // nothing for two minutes: come down fast
