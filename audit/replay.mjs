@@ -25,8 +25,9 @@ for (const l of byMaster.values()) l.sort((a, b) => a.from - b.from || a.at - b.
 const grace = params.assignmentGrace ?? 120;
 const assignmentOk = (ev, c, s) => {
   const a = assignments.get(c.assignment ?? ''); if (!a || a.master !== s.master || a.from > s.height) return false;
-  const l = (byMaster.get(s.master) ?? []).filter((x) => x.from <= s.height); const latest = l.at(-1), prev = l.at(-2);
-  const valid = a === latest || (a === prev && ev.created_at <= latest.at + grace);
+  const all = (byMaster.get(s.master) ?? []).filter((x) => x.from <= s.height), t = ev.created_at; // 8.4, as of the share's signing time
+  const before = all.filter((x) => x.at <= t), latest = before.at(-1), prev = before.at(-2), next = all.find((x) => x.at > t && x.at <= t + grace);
+  const valid = a === latest || (!!latest && a === prev && t <= latest.at + grace) || (!!next && a === next);
   return valid && (c.target ?? '').toLowerCase() === a.target && Math.abs(difficultyOf(a.target) - s.weight) < 1e-9;
 };
 const shares = lines(await get('shares.jsonl'));

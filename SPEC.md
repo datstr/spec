@@ -319,11 +319,15 @@ master to the assignment's and judges the work it forwards at the assignment's t
 whatever it does with its machines below that is its own business, and a hash that meets
 the local target but not the assignment's is a local receipt only.
 
-A share at height `h` may name the latest assignment for its master whose `from` is at or
-below `h`, or the one before that if the share was signed within `assignmentGrace` seconds
-of the latest being issued, so a target change never refuses work already in flight. Every
-assignment is retained (section 11) and the rule is a pure function of the assignment
-events, so a replay recomputes each share's weight from them rather than from the share.
+A share at height `h` signed at time `t` may name one of three assignments for its master
+among those whose `from` is at or below `h`: the latest issued at or before `t`; the one
+issued before that, if `t` is within `assignmentGrace` seconds of the latest being issued,
+so a target change never refuses work already in flight; or the first one issued after `t`
+but within `assignmentGrace` seconds of it, which absorbs clock skew between gateway and
+coordinator. "Latest" is relative to the share's own signing time, never to assignments
+issued later, so the rule gives the same answer during verification and in any replay. Every assignment is retained (section 11) and
+the rule is a pure function of the assignment events, so a replay recomputes each share's
+weight from them rather than from the share.
 
 ## 9. Split
 

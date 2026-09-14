@@ -122,11 +122,16 @@ export class Coordinator {
   currentAssignment(master) { return this.assignmentsByMaster.get(master)?.at(-1) ?? null; }
   // the assignments a share of `master` at `height`, signed at `time`, may name: the latest whose
   // `from` is at or below the height, or the one before it within the grace after the latest was issued
+  // 8.4: the latest issued at or before the share's signing time, the one before it within the
+  // grace, or the first issued after it within the grace (clock skew); never anything later
   validAssignments(master, height, time) {
-    const l = (this.assignmentsByMaster.get(master) ?? []).filter((a) => a.from <= height);
-    const latest = l.at(-1); if (!latest) return [];
-    const prev = l.at(-2);
-    return prev && time <= latest.at + this.params.assignmentGrace ? [latest, prev] : [latest];
+    const grace = this.params.assignmentGrace;
+    const all = (this.assignmentsByMaster.get(master) ?? []).filter((a) => a.from <= height);
+    const before = all.filter((a) => a.at <= time), latest = before.at(-1), prev = before.at(-2);
+    const next = all.find((a) => a.at > time && a.at <= time + grace);
+    const ok = [];
+    if (latest) ok.push(latest); if (latest && prev && time <= latest.at + grace) ok.push(prev); if (next) ok.push(next);
+    return ok;
   }
   async issueAssignment(master, difficulty, why) {
     const target = this.hash.bytesToHex(targetForDifficulty(difficulty)), from = this.tip?.height ?? 0;
