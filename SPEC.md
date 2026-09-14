@@ -234,7 +234,8 @@ these fields:
 | `header` | hex | full header bytes, 80 or 164 |
 | `coinbase` | hex | full coinbase transaction, witness included |
 | `branches` | hex[] | merkle branches from the coinbase to the root, display-order txids |
-| `target` | hex | the share target the gateway judged it at, 32 bytes big-endian |
+| `target` | hex | the target the share is judged at, 32 bytes big-endian: the assignment's target (8.4), or the gateway's own for a solo share |
+| `assignment` | string | event id of the assignment (8.4) the share was mined under; absent for a solo share |
 | `split` | string | event id of the split message the coinbase follows, or `solo` |
 | `parents` | string[] | DAG parents, empty at level 1 |
 | `job` | string | gateway-local job id, informational |
@@ -261,11 +262,17 @@ named code otherwise:
 8. `commitment`: the last output is the datstr commitment for this worker and `parents`.
 9. `split`: the outputs before it, less a witness commitment if present, are exactly the
    named split's outputs scaled to their sum (section 9.3), for a split the verifier issued
-   for this height and still holds; or the share names `solo` and the single output pays the
-   worker's master.
+   for this height and still holds; a split with no outputs (the window held no shares)
+   is followed by paying the worker's master alone. Or the share names `solo` and the single
+   output pays the worker's master: a solo share is a **receipt**, verified and retained,
+   weighing nothing and never in a window (8.2).
 10. `pow`: the proof-of-work hash, before the XOR mask, is at or below `target`.
-11. `difficulty-floor`: `2^224 / target` is at least the pool's `minDifficulty`.
-12. `duplicate`: the block hash has not been credited before.
+11. `assignment` (not for a solo share): the share names an assignment the verifier issued
+    to the share's master, valid at the share's height and time (8.4), and `target` is that
+    assignment's target.
+12. `difficulty-floor` (not for a solo share): `2^224 / target` is at least the pool's
+    `minDifficulty`.
+13. `duplicate`: the block hash has not been credited before.
 
 A share whose masked hash also meets the network target is a **block**. The gateway has
 already submitted it to its own node before signing the share, and the share carries the
@@ -275,8 +282,18 @@ balances (section 9.2).
 
 ### 8.2 Weight
 
-A credited share weighs `difficulty(target)`, the same function the chain uses for
-chainwork, so weights across vardiff levels are comparable and the window is a sum.
+A credited share weighs `difficulty(target)` of the assignment it names, the same function
+the chain uses for chainwork, so weights across vardiff levels are comparable and the
+window is a sum. A solo share weighs 0.
+
+Both rules exist because the gateway is the miner's software. If a share's weight came from
+a target the gateway named after it had the hash, a lucky hash could be declared at a target
+just above it and weigh far more than the work it took; the expected credit per hash is the
+same at every honest target, so the only thing a self-declared target buys is that choice
+after the fact. The assignment fixes the target before the work. And if solo shares were
+credited, a gateway could mine its own coinbase, keep every block it finds, and still draw
+on the window: solo work is what a gateway does when it has no coordinator, and it earns
+from the coordinator nothing.
 
 ### 8.3 Acknowledgement
 
@@ -285,6 +302,28 @@ A coordinator answers each share with an ack event, kind 23401, signed by its ke
 `seq` is the share's position in the coordinator's credit order, which the ledger snapshots
 refer to. The gateway keeps every ack. A share the coordinator acked `ok` and later left out
 of a ledger snapshot is provable with the share event and the ack alone.
+
+### 8.4 Assignment
+
+An assignment is a Nostr event of kind 23402, signed by the coordinator, tagged
+`["p", <master>]` and `["chain", id]`, whose content is
+`{ chain, master, target, difficulty, from }`: the share target, as 32 bytes big-endian, that
+shares of this master are judged and weighed at from height `from` on. On the BLAKE2b
+chains it may also carry the key material of section 10.
+
+The coordinator sends one for every master a gateway registers, at `startDifficulty` to
+begin with, and a new one whenever it moves that master's target: this is the pool's own
+vardiff, aiming at one credited share per `vardiffSeconds` for each master, bounded below
+by `minDifficulty`. The gateway sets the difficulty of every connection mining for that
+master to the assignment's and judges the work it forwards at the assignment's target;
+whatever it does with its machines below that is its own business, and a hash that meets
+the local target but not the assignment's is a local receipt only.
+
+A share at height `h` may name the latest assignment for its master whose `from` is at or
+below `h`, or the one before that if the share was signed within `assignmentGrace` seconds
+of the latest being issued, so a target change never refuses work already in flight. Every
+assignment is retained (section 11) and the rule is a pure function of the assignment
+events, so a replay recomputes each share's weight from them rather than from the share.
 
 ## 9. Split
 
@@ -338,7 +377,9 @@ A split is an event of kind 23403 from the coordinator, tagged `["chain", id]` a
 owed: [[master, sats]...] }`, where `from` and `to` are the `seq` of the first and last share
 in the window. The coordinator issues one for the next height `splitDelay` seconds (0.5 by
 default) after it sees a new tip, so the share that found the block is credited first, and
-sends it to every connected gateway and to any gateway that connects later.
+sends it to every connected gateway and to any gateway that connects later. A split whose
+window held no shares has no outputs: a gateway following it pays its own master alone,
+and its shares still name the split and are credited, which is how a window first fills.
 
 A gateway checks a split before following it, since the split is the one instruction it
 takes from outside: if the gateway's own shares fall inside the split's window (by `seq`)
@@ -369,8 +410,8 @@ option, not a default, so a policy disagreement never becomes a refusal.
 ## 10. Anti-withholding
 
 On the BLAKE2b chains the header carries a 16-byte `xorKey` and a
-`xorKeyMaskClearBits` parameter. A coordinator may issue an **assignment** event,
-kind 23402, that fixes the key material a gateway must use for a range of heights,
+`xorKeyMaskClearBits` parameter. A coordinator may put in the assignment event of
+section 8.4 the key material a gateway must use for a range of heights,
 so the machine hashing cannot tell a share from a block. The gateway commits to the
 assignment through the header itself, so no extra field is needed in the share.
 No proofs of assignment are exchanged, since the verifier relays every block anyway.
@@ -389,7 +430,9 @@ terms. The pod layout comes in a later revision. Kinds 33404 and 33405 are reser
 |---|---|---|
 | `/pool.json` | pool descriptor, kind 33400, signed by the coordinator | every parameter in section 9, the anchoring cadence of 11.2 if any, and the endpoints |
 | `/masters.jsonl` | one line per master | pubkey, payout script, the miner descriptor event |
-| `/shares.jsonl` | one line per credited share, in credit order | `seq`, event id, master, weight, height, block hash, split id, time |
+| `/shares.jsonl` | one line per credited share, in credit order | `seq`, event id, master, weight, height, block hash, split id, assignment id, time |
+| `/assignments.jsonl` | one line per assignment, in issue order | event id, master, target, `from`, time, the event (8.4) |
+| `/receipts.jsonl` | one line per solo share retained | event id, master, height, block hash, time |
 | `/shares/<id>.json` | the share event itself | section 8 |
 | `/snapshots/<height>.json` | ledger snapshot | the split's id and outputs, `sharesUpTo` (the `seq` the window was computed from), the window's shares and weight and `need`, weight per master, the template value, owed before and after |
 | `/blocks/<hash>.json` | block record | height, hash, share id, master, coinbase txid, split id, the node's relay answer, whether it is on the chain |
@@ -432,6 +475,7 @@ A gateway talks to a coordinator over one WebSocket carrying JSON messages, each
 | gateway | `hello` | `descriptor`: the miner descriptor event; `delegation`: the delegation event when the signer is a worker; `agent`: software and version |
 | coordinator | `welcome` | `pool`: the pool descriptor event; `split`: the current split event or null |
 | coordinator | `split` | `event`: a split (section 9.3) |
+| coordinator | `assignment` | `event`: an assignment (section 8.4) for a master the gateway registered; sent after `welcome` and `registered`, and whenever the target moves |
 | gateway | `register` | `descriptor` and optional `delegation` for another identity the gateway mines for (section 7); answered with `registered` |
 | gateway | `share` | `event`: a share (section 8) |
 | coordinator | `ack` | `event`: an ack (section 8.3) |
@@ -550,6 +594,10 @@ Named so that the format leaves room, and otherwise not part of this spec:
 - **Share theft**: a share is bound to a worker key by the commitment output and
   signed by it. Replaying someone else's share credits nobody.
 - **Sybil**: identities are free and worthless. Weight is proof of work.
+- **Self-declared difficulty**: a share's weight is the difficulty of an assignment fixed
+  before the work (8.4), never of a target the gateway names after it has the hash.
+- **Solo work with pool credit**: a solo share weighs nothing and never enters a window
+  (8.2), so mining one's own coinbase earns nothing from the coordinator.
 - **Coordinator dishonesty**: every credit is an ack the gateway keeps, every split
   is in the block, every snapshot is replayable. A dishonest coordinator is
   provably so, and at level 2 replaceable. A coordinator that anchors its snapshots

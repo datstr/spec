@@ -7,7 +7,7 @@ import { existsSync } from 'node:fs';
 import { signEvent, verifyEvent, content as contentOf, pubkeyOf } from '../gateway/lib/nostr.mjs';
 import { rootFromBranches } from '../gateway/lib/merkle.mjs';
 import { computeSplit, windowOf, scaleSplit, difficultyOf } from '../gateway/lib/split.mjs';
-import { meets } from '../gateway/lib/target.mjs';
+import { meets, targetForDifficulty } from '../gateway/lib/target.mjs';
 import { scriptToAddress } from '../gateway/lib/address.mjs';
 
 // Web Ledgers (https://webledgers.org/): the coordinator's balances as JSON-LD, agent URIs to amounts.
@@ -20,7 +20,7 @@ const ledger = ({ id, name, description, currency, entries, extra = {} }) => {
 const didOf = (pubkey) => `did:nostr:${pubkey}`;
 export const KIND = { share: 23400, ack: 23401, assignment: 23402, split: 23403, pool: 33400, miner: 33401, delegation: 33402, snapshot: 33404, block: 33405 };
 const RULES = ['segwit', 'blake2b'];
-const DEFAULTS = { feeBps: 0, feeScript: null, windowMultiple: 2, windowMinWeight: 0, minDifficulty: 1, minPayout: 546, maxOutputs: 512, staleDepth: 3, splitGrace: 30, poll: 1, splitDelayMs: 500,
+const DEFAULTS = { feeBps: 0, feeScript: null, windowMultiple: 2, windowMinWeight: 0, minDifficulty: 1, startDifficulty: 1, vardiffSeconds: 10, assignmentGrace: 120, minPayout: 546, maxOutputs: 512, staleDepth: 3, splitGrace: 30, poll: 1, splitDelayMs: 500,
   // socket hygiene: connections in all and per remote address, bytes per message, messages per second per connection (burst is twice that)
   maxConnections: 256, maxPerAddress: 16, maxMessageBytes: 4 * 1024 * 1024, maxMessagesPerSecond: 20, helloTimeoutMs: 15000 };
 
@@ -32,7 +32,8 @@ export class Coordinator {
     this.chain = this.params.chain;
     this.shares = []; this.seen = new Set(); this.masters = new Map(); this.workers = new Map(); this.clients = new Set();
     this.splits = new Map(); this.blocks = []; this.owed = {}; this.tip = null; this.prevAt = new Map(); this.targetAt = new Map();
-    this.stats = { shares: 0, rejected: 0, blocks: 0, byCode: {}, refusedConnections: 0, droppedConnections: 0 };
+    this.assignments = new Map(); this.assignmentsByMaster = new Map(); this.lastRetarget = 0;
+    this.stats = { shares: 0, receipts: 0, rejected: 0, blocks: 0, byCode: {}, refusedConnections: 0, droppedConnections: 0 };
     this.paid = new Map(); // address → sats paid on chain, from block records and their snapshots
     this.byAddress = new Map();
     this.started = Date.now();
@@ -45,6 +46,8 @@ export class Coordinator {
     for (const m of await lines(`${this.dataDir}/masters.jsonl`)) this.masters.set(m.pubkey, m);
     for (const d of await lines(`${this.dataDir}/delegations.jsonl`)) this.workers.set(d.worker, d);
     for (const s of await lines(`${this.dataDir}/shares.jsonl`)) { this.shares.push(s); this.seen.add(s.hash); }
+    for (const a of await lines(`${this.dataDir}/assignments.jsonl`)) this.addAssignment(a);
+    for (const r of await lines(`${this.dataDir}/receipts.jsonl`)) this.seen.add(r.hash);
     for (const b of await lines(`${this.dataDir}/blocks.jsonl`)) this.blocks.unshift(b);
     if (existsSync(`${this.dataDir}/owed.json`)) this.owed = JSON.parse(await readFile(`${this.dataDir}/owed.json`, 'utf8'));
     this.stats.shares = this.shares.length; this.stats.blocks = this.blocks.length;
@@ -71,6 +74,7 @@ export class Coordinator {
 
   // --- the tip, from the coordinator's own node; a new tip issues a split for the next height ---
   async poll() {
+    await this.retargetAssignments();
     const t = await this.rpc('getblocktemplate', { rules: RULES });
     // the target for a height can change without a new tip (testnet4's minimum-difficulty window): track it every poll
     this.targetAt.set(t.height, t.target);
@@ -109,6 +113,48 @@ export class Coordinator {
 
   broadcast(msg) { const s = JSON.stringify(msg); for (const c of this.clients) c.send(s); }
 
+  // --- SPEC 8.4: assignments. A share's weight is the difficulty of a target the coordinator
+  // fixed for its master before the work, never one the gateway names after finding a hash.
+  addAssignment(rec) {
+    this.assignments.set(rec.id, rec);
+    const l = this.assignmentsByMaster.get(rec.master) ?? []; l.push(rec); l.sort((a, b) => a.from - b.from || a.at - b.at); this.assignmentsByMaster.set(rec.master, l);
+  }
+  currentAssignment(master) { return this.assignmentsByMaster.get(master)?.at(-1) ?? null; }
+  // the assignments a share of `master` at `height`, signed at `time`, may name: the latest whose
+  // `from` is at or below the height, or the one before it within the grace after the latest was issued
+  validAssignments(master, height, time) {
+    const l = (this.assignmentsByMaster.get(master) ?? []).filter((a) => a.from <= height);
+    const latest = l.at(-1); if (!latest) return [];
+    const prev = l.at(-2);
+    return prev && time <= latest.at + this.params.assignmentGrace ? [latest, prev] : [latest];
+  }
+  async issueAssignment(master, difficulty, why) {
+    const target = this.hash.bytesToHex(targetForDifficulty(difficulty)), from = this.tip?.height ?? 0;
+    const ev = signEvent(this.key, { kind: KIND.assignment, tags: [['p', master], ['chain', this.chain]], content: { chain: this.chain, master, target, difficulty: difficultyOf(target), from } });
+    const rec = { id: ev.id, master, target, from, at: ev.created_at, event: ev };
+    this.addAssignment(rec);
+    await appendFile(`${this.dataDir}/assignments.jsonl`, JSON.stringify(rec) + '\n');
+    for (const c of this.clients) if (c.identities?.has(master)) c.send({ type: 'assignment', event: ev });
+    this.log(`assignment for ${master.slice(0, 12)}…: difficulty ${difficultyOf(target)} from h${from} (${why})`);
+    return rec;
+  }
+  // northbound vardiff: aim at one credited share per vardiffSeconds for every connected master
+  async retargetAssignments() {
+    const now = Math.floor(Date.now() / 1000);
+    if (now - this.lastRetarget < 60) return; this.lastRetarget = now;
+    const window = 120, cut = now - window, counts = new Map();
+    for (let i = this.shares.length - 1; i >= 0 && this.shares[i].at >= cut; i--) counts.set(this.shares[i].master, (counts.get(this.shares[i].master) ?? 0) + 1);
+    const connected = new Set(); for (const c of this.clients) for (const m of c.identities ?? []) connected.add(m);
+    for (const master of connected) {
+      const cur = this.currentAssignment(master); if (!cur || now - cur.at < 60) continue;
+      const n = counts.get(master) ?? 0, since = Math.min(window, now - cur.at);
+      if (n < 8 && since < window) continue;
+      const d0 = difficultyOf(cur.target); let d = d0 * this.params.vardiffSeconds / (since / Math.max(n, 0.5));
+      d = Math.min(d0 * 4, Math.max(d0 / 4, d)); d = Math.max(this.params.minDifficulty, Number(d.toPrecision(3)));
+      if (d / d0 > 1.4 || d / d0 < 0.7) await this.issueAssignment(master, d, `${n} shares in ${since} s`);
+    }
+  }
+
   // --- a gateway connection ---
   connect(conn) {
     const p = this.params;
@@ -119,7 +165,7 @@ export class Coordinator {
     if (this.clients.size >= p.maxConnections) return drop(`too many connections (${p.maxConnections})`);
     if (perAddr >= p.maxPerAddress) return drop(`too many connections from ${addr} (${p.maxPerAddress})`);
     this.byAddress.set(addr, perAddr + 1);
-    this.clients.add(conn);
+    this.clients.add(conn); conn.identities = new Set();
     let tokens = p.maxMessagesPerSecond * 2, last = Date.now(), closed = false;
     const kick = (why) => { if (closed) return; closed = true; this.stats.droppedConnections++; this.log(`gateway ${conn.remote ?? ''} dropped: ${why}`); conn.send({ type: 'error', error: why }); try { conn.close?.(); } catch {} };
     const helloTimer = setTimeout(() => { if (!conn.master) kick('no hello'); }, p.helloTimeoutMs);
@@ -137,7 +183,7 @@ export class Coordinator {
       try {
         if (m?.type === 'hello') return await this.hello(conn, m);
         if (!conn.master) return conn.send({ type: 'error', error: 'hello first' });
-        if (m?.type === 'register') { const r = await this.register(conn, m); return conn.send(r.error ? { type: 'error', error: r.error } : { type: 'registered', master: r.master, worker: r.worker ?? null }); }
+        if (m?.type === 'register') { const r = await this.register(conn, m); if (r.error) return conn.send({ type: 'error', error: r.error }); conn.send({ type: 'registered', master: r.master, worker: r.worker ?? null }); return conn.send({ type: 'assignment', event: r.assignment }); }
         if (m?.type === 'share') return await this.share(conn, m.event);
         conn.send({ type: 'error', error: `unknown type ${m?.type}` });
       } catch (e) { this.log(`gateway ${conn.remote ?? ''}: ${e.message}`); conn.send({ type: 'error', error: e.message }); }
@@ -169,7 +215,9 @@ export class Coordinator {
       worker = rec.worker;
     }
     if (m.type === 'register') this.log(`gateway ${conn.remote ?? ''} registered master ${d.pubkey.slice(0, 16)}…${worker ? ` worker ${worker.slice(0, 16)}…` : ''}`);
-    return { master: d.pubkey, worker };
+    conn.identities.add(d.pubkey);
+    const a = this.currentAssignment(d.pubkey) ?? await this.issueAssignment(d.pubkey, this.params.startDifficulty, 'first assignment');
+    return { master: d.pubkey, worker, assignment: a.event };
   }
 
   async hello(conn, m) {
@@ -179,6 +227,7 @@ export class Coordinator {
     this.log(`gateway ${conn.remote ?? ''} hello: master ${r.master.slice(0, 16)}…${r.worker ? ` worker ${r.worker.slice(0, 16)}…` : ''} (${conn.agent})`);
     const split = this.tip && this.splits.get(this.tip.height);
     conn.send({ type: 'welcome', pool: this.descriptor, split: split?.event ?? null });
+    conn.send({ type: 'assignment', event: r.assignment });
   }
 
   // --- SPEC 8.1, in order ---
@@ -216,22 +265,37 @@ export class Coordinator {
       const split = [...this.splits.values()].find((s) => s.event.id === c.split);
       if (!split) return fail('split', 'unknown split');
       if (split.height !== c.height) return fail('split', 'split is for another height');
-      const V = payOutputs.reduce((a, o) => a + o.value, 0);
-      const want = scaleSplit(split.outputs, V);
-      if (payOutputs.length !== want.length || payOutputs.some((o, i) => o.scriptPubKey !== want[i][0] || o.value !== want[i][1])) return fail('split', 'coinbase outputs differ from the split');
+      if (split.outputs.length === 0) { // an empty split: the window had no shares, the coinbase pays the share's master alone
+        if (payOutputs.length !== 1 || payOutputs[0].scriptPubKey !== master.payout) return fail('split', 'an empty split pays the master alone');
+      } else {
+        const V = payOutputs.reduce((a, o) => a + o.value, 0);
+        const want = scaleSplit(split.outputs, V);
+        if (payOutputs.length !== want.length || payOutputs.some((o, i) => o.scriptPubKey !== want[i][0] || o.value !== want[i][1])) return fail('split', 'coinbase outputs differ from the split');
+      }
     }
     const d = this.pow.hashHeaderV2Detailed(header);
     if (!/^[0-9a-f]{64}$/i.test(c.target ?? '')) return fail('pow', 'no target');
     if (!meets(this.hash.hexToBytes(d.blake2b2), this.hash.hexToBytes(c.target))) return fail('pow', 'hash above the share target');
-    const weight = difficultyOf(c.target);
-    if (weight < this.params.minDifficulty) return fail('difficulty-floor', `${weight} < ${this.params.minDifficulty}`);
+    // SPEC 8.2/8.4: a solo share is a receipt and weighs nothing; any other share weighs the
+    // difficulty of the assignment it names, which must be the coordinator's own, for this
+    // master, valid at this height, and the target it carries must be the assignment's
+    let weight = 0, assignmentId = null;
+    if (c.split !== 'solo') {
+      const a = this.assignments.get(c.assignment ?? '');
+      if (!a) return fail('assignment', 'unknown assignment');
+      if (a.master !== masterKey) return fail('assignment', 'assignment is for another master');
+      if (!this.validAssignments(masterKey, c.height, ev.created_at).includes(a)) return fail('assignment', 'assignment not valid for this height');
+      if (c.target.toLowerCase() !== a.target) return fail('assignment', 'target differs from the assignment');
+      weight = difficultyOf(a.target); assignmentId = a.id;
+      if (weight < this.params.minDifficulty) return fail('difficulty-floor', `${weight} < ${this.params.minDifficulty}`);
+    }
     if (this.seen.has(d.blockHash)) return fail('duplicate');
     // the network target for the share's own height: the tip may already have moved on by the time the share arrives
     const netTarget = this.targetAt.get(c.height) ?? (c.height === this.tip.height ? this.tip.target : null);
     let isBlock = netTarget ? meets(this.hash.hexToBytes(d.blockHash), this.hash.hexToBytes(netTarget)) : false;
     // a share that carries the block is one the gateway submitted: if the node has it, it is a block whatever we recorded for the target
     if (!isBlock && c.block) { try { const h = await this.rpc('getblockheader', d.blockHash); if (h && h.confirmations >= 0) isBlock = true; } catch {} }
-    return { ok: true, weight, master: masterKey, worker: ev.pubkey, hash: d.blockHash, isBlock, height: c.height, coinbaseTxid: cbTxid, splitId: c.split };
+    return { ok: true, weight, master: masterKey, worker: ev.pubkey, hash: d.blockHash, isBlock, height: c.height, coinbaseTxid: cbTxid, splitId: c.split, assignment: assignmentId };
   }
 
   async share(conn, ev) {
@@ -241,7 +305,17 @@ export class Coordinator {
       this.log(`share ${ev?.id?.slice(0, 12)}… refused: ${r.code}${r.detail ? ' (' + r.detail + ')' : ''}`);
       return conn.send({ type: 'ack', event: signEvent(this.key, { kind: KIND.ack, tags: [['e', ev?.id ?? '']], content: { share: ev?.id ?? null, result: r.code, detail: r.detail ?? null, weight: 0 } }) });
     }
-    const rec = { seq: this.shares.length + 1, id: ev.id, master: r.master, worker: r.worker, weight: r.weight, height: r.height, hash: r.hash, split: r.splitId, at: Math.floor(Date.now() / 1000) };
+    if (r.splitId === 'solo') { // a receipt: verified, kept, never in the window
+      const rec = { id: ev.id, master: r.master, worker: r.worker, height: r.height, hash: r.hash, at: Math.floor(Date.now() / 1000) };
+      this.seen.add(r.hash); this.stats.receipts++;
+      await appendFile(`${this.dataDir}/receipts.jsonl`, JSON.stringify(rec) + '\n');
+      await writeFile(`${this.dataDir}/shares/${ev.id}.json`, JSON.stringify(ev));
+      conn.send({ type: 'ack', event: signEvent(this.key, { kind: KIND.ack, tags: [['e', ev.id]], content: { share: ev.id, result: 'ok', weight: 0, seq: null, receipt: true } }) });
+      this.log(`receipt ${r.hash.slice(0, 16)}… h${r.height} master ${r.master.slice(0, 12)}… (solo, weight 0)${r.isBlock ? ' BLOCK' : ''}`);
+      if (r.isBlock) await this.block(ev, r);
+      return;
+    }
+    const rec = { seq: this.shares.length + 1, id: ev.id, master: r.master, worker: r.worker, weight: r.weight, height: r.height, hash: r.hash, split: r.splitId, assignment: r.assignment, at: Math.floor(Date.now() / 1000) };
     this.shares.push(rec); this.seen.add(r.hash); this.stats.shares++;
     await appendFile(`${this.dataDir}/shares.jsonl`, JSON.stringify(rec) + '\n');
     await writeFile(`${this.dataDir}/shares/${ev.id}.json`, JSON.stringify(ev));
@@ -362,6 +436,8 @@ export async function routes(co) {
     if (path === '/shares.jsonl') return existsSync(`${co.dataDir}/shares.jsonl`) ? [200, 'application/x-ndjson', await readFile(`${co.dataDir}/shares.jsonl`, 'utf8')] : [200, 'application/x-ndjson', ''];
     if (path === '/delegations.jsonl') return existsSync(`${co.dataDir}/delegations.jsonl`) ? [200, 'application/x-ndjson', await readFile(`${co.dataDir}/delegations.jsonl`, 'utf8')] : [200, 'application/x-ndjson', ''];
     if (path === '/masters.jsonl') return existsSync(`${co.dataDir}/masters.jsonl`) ? [200, 'application/x-ndjson', await readFile(`${co.dataDir}/masters.jsonl`, 'utf8')] : [200, 'application/x-ndjson', ''];
+    if (path === '/assignments.jsonl') return existsSync(`${co.dataDir}/assignments.jsonl`) ? [200, 'application/x-ndjson', await readFile(`${co.dataDir}/assignments.jsonl`, 'utf8')] : [200, 'application/x-ndjson', ''];
+    if (path === '/receipts.jsonl') return existsSync(`${co.dataDir}/receipts.jsonl`) ? [200, 'application/x-ndjson', await readFile(`${co.dataDir}/receipts.jsonl`, 'utf8')] : [200, 'application/x-ndjson', ''];
     return safe(path) ? [404, 'text/plain', 'not found'] : [404, 'text/plain', 'not found'];
   };
 }

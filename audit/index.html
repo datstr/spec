@@ -57,7 +57,7 @@
 
 <section>
   <h2>Shares in the window</h2>
-  <div style="overflow-x:auto"><table id="shares"><thead><tr><th class="num">Seq</th><th>Share</th><th>Master</th><th class="num">Height</th><th class="num">Weight</th><th>Sig</th><th>Header</th><th>Merkle</th><th>Commit</th><th>Split</th><th>PoW</th></tr></thead><tbody></tbody></table></div>
+  <div style="overflow-x:auto"><table id="shares"><thead><tr><th class="num">Seq</th><th>Share</th><th>Master</th><th class="num">Height</th><th class="num">Weight</th><th>Sig</th><th>Header</th><th>Merkle</th><th>Commit</th><th>Split</th><th>PoW</th><th>Assign</th></tr></thead><tbody></tbody></table></div>
 </section>
 
 <footer>Engine: <code>bitcoin-desktop/schema@v0.0.25</code> from jsDelivr with the <code>knots-blake2b</code> overlay; split: <code>gateway/lib/split.mjs</code> from this repository. Not checked here: that the previous block of each share is on the chain, which needs a node. Everything else in SPEC.md 8.1 is.</footer>
@@ -110,6 +110,16 @@ async function replay(base, height) {
   let goodDesc = 0; for (const m of masters.values()) if (nostr.verifyNostrEvent(m.descriptor)) goodDesc++;
   check('miner descriptors signed by their masters', goodDesc === masters.size, `${goodDesc} of ${masters.size}`);
   let delegations = new Map(); try { delegations = new Map(lines(await get('delegations.jsonl')).map((d) => [d.worker, d])); } catch {}
+  // SPEC 8.4: weights come from assignments the coordinator issued before the work
+  const assignments = new Map(), byMaster = new Map();
+  try { for (const a of lines(await get('assignments.jsonl'))) { assignments.set(a.id, a); const l = byMaster.get(a.master) ?? []; l.push(a); byMaster.set(a.master, l); } } catch {}
+  for (const l of byMaster.values()) l.sort((a, b) => a.from - b.from || a.at - b.at);
+  const grace = params.assignmentGrace ?? 120;
+  const assignmentOk = (ev, c, s) => {
+    const a = assignments.get(c.assignment ?? ''); if (!a || a.master !== s.master || a.from > s.height) return false;
+    const l = (byMaster.get(s.master) ?? []).filter((x) => x.from <= s.height); const latest = l.at(-1), prev = l.at(-2);
+    return (a === latest || (a === prev && ev.created_at <= latest.at + grace)) && (c.target ?? '').toLowerCase() === a.target && Math.abs(S.difficultyOf(a.target) - s.weight) < 1e-9;
+  };
   if (delegations.size) { let ok = 0; for (const d of delegations.values()) if (nostr.verifyNostrEvent(d.delegation) && d.delegation.pubkey === d.master && JSON.parse(d.delegation.content).worker === d.worker) ok++; check('delegations signed by the masters they name', ok === delegations.size, `${ok} of ${delegations.size} workers`); }
   const signerOk = (ev, s) => ev.pubkey === s.master || delegations.get(ev.pubkey)?.master === s.master;
   const shares = lines(await get('shares.jsonl'));
@@ -128,7 +138,7 @@ async function replay(base, height) {
   const splitsSeen = new Map(); let allGood = true;
   const commitmentFor = (pubkey) => '6a20' + hash.bytesToHex(hash.taggedHash('datstr/share', hash.hexToBytes(pubkey + '00'.repeat(32))));
   for (const s of win.shares) {
-    const res = { sig: null, header: null, merkle: null, commit: null, split: null, pow: null };
+    const res = { sig: null, header: null, merkle: null, commit: null, split: null, pow: null, assign: null };
     let ev, c;
     try { ev = JSON.parse(await get(`shares/${s.id}.json`)); res.sig = nostr.verifyNostrEvent(ev) && signerOk(ev, s); c = JSON.parse(ev.content); } catch { res.sig = false; }
     if (c) {
@@ -143,13 +153,14 @@ async function replay(base, height) {
         else {
           let sp = splitsSeen.get(c.split);
           if (!sp) { try { const sn = JSON.parse(await get(`snapshots/${c.height}.json`)); sp = sn.split === c.split ? sn : null; } catch { sp = null; } splitsSeen.set(c.split, sp); }
-          if (!sp) res.split = null; else { const V = pays.reduce((a, o) => a + o.value, 0); const want = S.scaleSplit(sp.outputs, V); res.split = pays.length === want.length && pays.every((o, i) => o.scriptPubKey === want[i][0] && o.value === want[i][1]); }
+          if (!sp) res.split = null; else if (!sp.outputs.length) res.split = pays.length === 1 && pays[0].scriptPubKey === masters.get(s.master)?.payout; else { const V = pays.reduce((a, o) => a + o.value, 0); const want = S.scaleSplit(sp.outputs, V); res.split = pays.length === want.length && pays.every((o, i) => o.scriptPubKey === want[i][0] && o.value === want[i][1]); }
         }
       }
-      if (header) { const d = pow.hashHeaderV2Detailed(header); res.pow = meets(hash.hexToBytes(d.blake2b2), hash.hexToBytes(c.target)) && d.blockHash === s.hash && Math.abs(S.difficultyOf(c.target) - s.weight) < 1e-9; }
+      if (header) { const d = pow.hashHeaderV2Detailed(header); res.pow = meets(hash.hexToBytes(d.blake2b2), hash.hexToBytes(c.target)) && d.blockHash === s.hash; }
+      res.assign = assignmentOk(ev, c, s);
     }
     if (Object.values(res).some((v) => v === false)) allGood = false;
-    rows.push(`<tr><td class="num">${s.seq}</td><td class="mono"><a href="${base}/shares/${s.id}.json" target="_blank" rel="noopener">${s.id.slice(0, 12)}…</a></td><td class="mono" title="${esc(s.master)}">${s.master.slice(0, 12)}…</td><td class="num">${s.height}</td><td class="num">${num(s.weight, 4)}</td><td class="v">${mark(res.sig)}</td><td class="v">${mark(res.header)}</td><td class="v">${mark(res.merkle)}</td><td class="v">${mark(res.commit)}</td><td class="v">${mark(res.split)}</td><td class="v">${mark(res.pow)}</td></tr>`);
+    rows.push(`<tr><td class="num">${s.seq}</td><td class="mono"><a href="${base}/shares/${s.id}.json" target="_blank" rel="noopener">${s.id.slice(0, 12)}…</a></td><td class="mono" title="${esc(s.master)}">${s.master.slice(0, 12)}…</td><td class="num">${s.height}</td><td class="num">${num(s.weight, 4)}</td><td class="v">${mark(res.sig)}</td><td class="v">${mark(res.header)}</td><td class="v">${mark(res.merkle)}</td><td class="v">${mark(res.commit)}</td><td class="v">${mark(res.split)}</td><td class="v">${mark(res.pow)}</td><td class="v">${mark(res.assign)}</td></tr>`);
     document.querySelector('#shares tbody').innerHTML = rows.join('');
   }
   check('every share in the window verifies (signature, header, merkle, commitment, split, proof of work)', allGood, `${win.shares.length} shares`);

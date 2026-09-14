@@ -4,7 +4,7 @@
 //
 //   node plugin/standalone.mjs --conf <bitcoin.conf> --network btc:testnet4-blake2b --data <dir>
 //                              [--port 3400] [--key <hex>] [--window-multiple 2] [--window-min-weight 0]
-//                              [--min-difficulty 1] [--fee-bps 0] [--activation N] [--headline S]
+//                              [--min-difficulty 1] [--start-difficulty 1] [--fee-bps 0] [--activation N] [--headline S]
 import http from 'node:http';
 import { createCoordinator, routes } from './coordinator.mjs';
 import { SCHEMA } from '../gateway/lib/engine.mjs';
@@ -16,7 +16,7 @@ const num = (v) => v === undefined ? undefined : Number(v);
 const port = Number(args.port ?? 3400);
 const co = await createCoordinator({
   conf: args.conf, network: args.network, dataDir: args.data ?? './datstr-coordinator', key: args.key, activation: args.activation, headline: args.headline,
-  params: { windowMultiple: num(args['window-multiple']), windowMinWeight: num(args['window-min-weight']), minDifficulty: num(args['min-difficulty']), feeBps: num(args['fee-bps']), feeScript: args['fee-script'], endpoints: { ws: `ws://127.0.0.1:${port}/ws`, http: `http://127.0.0.1:${port}/` } },
+  params: { windowMultiple: num(args['window-multiple']), windowMinWeight: num(args['window-min-weight']), minDifficulty: num(args['min-difficulty']), startDifficulty: num(args['start-difficulty']), feeBps: num(args['fee-bps']), feeScript: args['fee-script'], endpoints: { ws: `ws://127.0.0.1:${port}/ws`, http: `http://127.0.0.1:${port}/` } },
 }, log);
 for (const k of Object.keys(co.params)) if (co.params[k] === undefined) delete co.params[k];
 const route = await routes(co);

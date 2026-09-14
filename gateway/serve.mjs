@@ -38,6 +38,7 @@ import { makeRpc } from './lib/rpc.mjs';
 import { loadEngine } from './lib/engine.mjs';
 import { buildBlock } from './lib/block.mjs';
 import { targetForDifficulty, difficultyOfTarget, meets } from './lib/target.mjs';
+import { difficultyOf } from './lib/split.mjs';
 import { StratumServer } from './stratum.mjs';
 import { scriptToAddress } from './lib/address.mjs';
 import { signEvent, randomKey, pubkeyOf, verifyEvent, content as contentOf } from './lib/nostr.mjs';
@@ -86,6 +87,19 @@ const descriptor = () => DESCRIPTOR ?? signEvent(KEY, { kind: 33401, tags: [['d'
 // --- identities (SPEC 7): the gateway's own, one per address a client brings, one per delegating master ---
 const gatewayIdentity = { mode: 'gateway', key: KEY, pubkey: WORKER, master: MASTER, payout: MASTER_PAYOUT, address: payAddrs[0], get descriptor() { return descriptor(); }, delegation: DELEGATION };
 const identities = new Map(); // master pubkey → identity, every one the pool has been told about
+// SPEC 8.4: the pool's assignment per master fixes the target its shares are judged and weighed at
+const assignments = new Map(); // master pubkey → { id, target, targetBytes, diff, from }
+const masterOf = (c) => c.identity?.master ?? MASTER;
+function applyAssignment(c) { const a = assignments.get(masterOf(c)); if (a && c.subscribed && c.diff !== a.diff) { c.fixedDiff = a.diff; stratum.setDiff(c, a.diff, 'pool assignment'); } }
+function onAssignment(ev) {
+  if (!ev || ev.kind !== 23402 || !verifyEvent(ev) || (pool.pubkey && ev.pubkey !== pool.pubkey)) return log('pool: assignment with a bad signature ignored');
+  const c = contentOf(ev); if (!c || c.chain !== NETWORK || !/^[0-9a-f]{64}$/i.test(c.target ?? '') || !/^[0-9a-f]{64}$/i.test(c.master ?? '')) return log('pool: malformed assignment ignored');
+  const a = { id: ev.id, master: c.master, target: c.target.toLowerCase(), targetBytes: hexToBytes(c.target), diff: difficultyOf(c.target), from: Number(c.from ?? 0) };
+  const old = assignments.get(a.master); if (old && (old.from > a.from || (old.from === a.from && old.at > ev.created_at))) return;
+  a.at = ev.created_at; assignments.set(a.master, a);
+  log(`pool: assignment for ${a.master.slice(0, 12)}…: difficulty ${a.diff} from h${a.from}`);
+  for (const cl of stratum.clients) if (masterOf(cl) === a.master) applyAssignment(cl);
+}
 function poolRegister(id) { if (id.master === MASTER) return; poolSend({ type: 'register', descriptor: id.descriptor, ...(id.delegation ? { delegation: id.delegation } : {}) }); }
 function identityForAddress(address) {
   const spk = script.addressToScript(address, k.params); if (!spk) return null;
@@ -122,6 +136,7 @@ function poolConnect() {
       if (floor > 0 && stratum.vardiff && stratum.vardiff.min < floor) { stratum.vardiff.min = floor; log(`pool: minimum difficulty ${floor}, vardiff floor raised to it`); for (const c of stratum.clients) if (c.subscribed && c.diff < floor) stratum.setDiff(c, floor, 'pool minimum'); }
     }
     else if (m.type === 'split') onSplit(m.event);
+    else if (m.type === 'assignment') onAssignment(m.event);
     else if (m.type === 'ack') { const c = contentOf(m.event) ?? {}; if (c.result === 'ok') { pool.acked++; if (c.seq) { ackedSeqs.push(c.seq); if (ackedSeqs.length > 10000) ackedSeqs.shift(); } } else pool.refused++; pool.lastAck = c; if (c.result !== 'ok') log(`pool: share refused: ${c.result}${c.detail ? ' (' + c.detail + ')' : ''}`); }
     else if (m.type === 'error') log(`pool: error ${m.error}`);
   };
@@ -166,6 +181,8 @@ const rateOf = (samples, now) => { const cut = now - 600000; while (samples.leng
 
 function makeJob(t) {
   const sp = pool.connected ? pool.splits.get(t.height) : null;
+  // an empty split (the window has no shares yet) says: pay your own master alone, and the
+  // share still names the split, so it is credited and the window fills
   const split = sp && sp.outputs.length ? scaleSplit(sp.outputs, t.coinbasevalue) : null;
   const prevHidden = taggedHash('Bitcoin prevblock header, hashed', hexToBytes(t.previousblockhash)); prevHidden.fill(0, 0, 6);
   const variants = new Map(); // identity pubkey → the block for that identity: the commitment output differs, and solo pays it
@@ -181,14 +198,14 @@ function makeJob(t) {
   return {
     id: (++jobSeq).toString(16).padStart(8, '0'), height: t.height, prev: t.previousblockhash, template: t, block: base.block,
     prevHidden: base.prevHidden, coinb1: base.coinb1, bits: t.bits, ntimeField: '00'.repeat(8),
-    networkTarget: hexToBytes(t.target), made: Date.now(), splitId: split ? sp.id : 'solo',
+    networkTarget: hexToBytes(t.target), made: Date.now(), splitId: sp ? sp.id : 'solo',
     branches: base.branches, variant: (c) => build(c?.identity ?? gatewayIdentity),
   };
 }
 
 const stratum = new StratumServer({ difficulty: DIFF, vardiff: VARDIFF, log, maxClients: Number(args['max-clients'] ?? 1024),
   // a username that is a payable address makes the client its own identity, paid there (SPEC 7)
-  onAuthorize: async (c, user) => { const addr = user.split('.')[0].trim(); const id = addr ? identityForAddress(addr) : null; if (id) c.identity = id; },
+  onAuthorize: async (c, user) => { const addr = user.split('.')[0].trim(); const id = addr ? identityForAddress(addr) : null; if (id) c.identity = id; applyAssignment(c); },
   // the miner page's identity flow (xlogin): which worker this gateway derives for a master, then the signed descriptor and delegation
   onMethod: async (c, method, params) => {
     if (method === 'mining.datstr_worker') {
@@ -197,7 +214,7 @@ const stratum = new StratumServer({ difficulty: DIFF, vardiff: VARDIFF, log, max
       if (address && !payout) throw new Error(`not an address for ${NETWORK}: ${address}`);
       return { worker: workerForMaster({ hash, gatewayKey: KEY, chain: NETWORK, master }).pubkey, chain: NETWORK, payout };
     }
-    if (method === 'mining.datstr_identity') { const id = identityForDelegation(params[0], params[1]); c.identity = id; stratum.renotify(c, true); return { master: id.master, worker: id.pubkey, payout: id.payout }; }
+    if (method === 'mining.datstr_identity') { const id = identityForDelegation(params[0], params[1]); c.identity = id; stratum.renotify(c, true); applyAssignment(c); return { master: id.master, worker: id.pubkey, payout: id.payout }; }
     return undefined;
   },
   onShare: async ({ job, fields, user, client, diff, target }) => {
@@ -210,15 +227,19 @@ const stratum = new StratumServer({ difficulty: DIFF, vardiff: VARDIFF, log, max
   if (seen.has(d.blockHash)) { stats.rejected++; cs.rejected++; cs.rejectedDiff += diff; stats.rejectedDiff += diff; return { ok: false, code: 22, reason: 'duplicate' }; }
   seen.add(d.blockHash);
   stats.shares++; stats.diff += diff; cs.shares++; cs.diff += diff; cs.lastShare = Date.now(); recent.push([Date.now(), diff]); cs.recent.push([Date.now(), diff]);
-  const shareTargetHex = bytesToHex(target);
   const isBlock = meets(hashBytes, job.networkTarget);
   const stale = job.prev !== current?.prev;
   const blockHex = isBlock ? k.codec.encodeHex('Block', { header, transactions: v.block.transactions }) : null;
-  poolSend({ type: 'share', event: signEvent(id.key, { kind: 23400, tags: [['chain', NETWORK], ['h', String(job.height)], ['split', job.splitId]], content: {
+  // pooled work is judged at the pool's assignment for this master, whatever the local difficulty:
+  // a hash above that target is a local receipt only; a solo share carries the local target and weighs nothing
+  const a = job.splitId === 'solo' ? null : assignments.get(id.master);
+  const forward = job.splitId === 'solo' || (a && a.from <= job.height && meets(powBytes, a.targetBytes));
+  if (forward) poolSend({ type: 'share', event: signEvent(id.key, { kind: 23400, tags: [['chain', NETWORK], ['h', String(job.height)], ['split', job.splitId]], content: {
     chain: NETWORK, height: job.height, header: k.codec.encodeHex('BlockHeader', header), coinbase: k.codec.encodeHex('Transaction', v.block.coinbase), branches: v.branches,
-    target: shareTargetHex, split: job.splitId, parents: [], job: job.id, ...(blockHex && job.height <= STOP ? { block: blockHex } : {}),
+    target: a ? a.target : bytesToHex(target), ...(a ? { assignment: a.id } : {}), split: job.splitId, parents: [], job: job.id, ...(blockHex && job.height <= STOP ? { block: blockHex } : {}),
   } }) });
-  log(`share ${d.blockHash.slice(0, 20)}… job ${job.id} h${job.height} diff ${diff} ${user}${id.mode === 'gateway' ? '' : ` (${id.mode} master ${id.master.slice(0, 8)}…)`}${isBlock ? ' BLOCK' : ''}${stale ? ' (stale job)' : ''}${job.splitId === 'solo' ? '' : ' split ' + job.splitId.slice(0, 8)}`);
+  else { cs.local = (cs.local ?? 0) + 1; stats.local = (stats.local ?? 0) + 1; }
+  log(`share ${d.blockHash.slice(0, 20)}… job ${job.id} h${job.height} diff ${diff} ${user}${id.mode === 'gateway' ? '' : ` (${id.mode} master ${id.master.slice(0, 8)}…)`}${isBlock ? ' BLOCK' : ''}${stale ? ' (stale job)' : ''}${job.splitId === 'solo' ? '' : ' split ' + job.splitId.slice(0, 8)}${forward ? '' : a ? ' (local: above the assignment target)' : ' (local: no assignment yet)'}`);
   if (isBlock && job.height > STOP) { log(`BLOCK ${d.blockHash} at height ${job.height} NOT submitted: above --stop-height ${STOP}`); return { ok: true }; }
   if (isBlock) {
     const hex = blockHex;

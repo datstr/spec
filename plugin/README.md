@@ -65,6 +65,9 @@ All in the pool descriptor (`/pool.json`), signed by the coordinator's key.
 | `feeBps`, `feeScript` | 0, none | pool fee in basis points and where it goes |
 | `windowMultiple` | 2 | window weight as a multiple of the template's network difficulty |
 | `windowMinWeight` | 0 | window weight floor; use it alone (`windowMultiple` 0) on chains whose template difficulty swings, like testnet4 |
+| `startDifficulty` | 1 | a master's first assignment (SPEC 8.4): the difficulty its shares are judged and weighed at until the coordinator's vardiff moves it |
+| `vardiffSeconds` | 10 | the coordinator aims at one credited share per this many seconds per master, adjusting assignments by up to 4× a minute, never below `minDifficulty` |
+| `assignmentGrace` | 120 | seconds after a new assignment during which shares under the previous one are still credited |
 | `minDifficulty` | 1 | smallest share difficulty credited (ratum's convention: 1 is 2^32 hashes) |
 | `minPayout` | 546 | smallest coinbase output written |
 | `maxOutputs` | 512 | coinbase outputs cap; the rest is owed |
