@@ -67,7 +67,8 @@ export class StratumServer {
   // The current job again for one client, under a new id: after its identity changed, its coinbase did too.
   renotify(c, clean = true) { if (this.job && c.subscribed) this.notify(c, this.cloneJob(this.job), clean); }
   setDifficulty(c) { this.send(c, { id: null, method: 'mining.set_difficulty', params: [c.diff] }); }
-  clamp(d) { const v = this.vardiff ?? { min: 1e-6, max: 1e9 }; return Math.min(v.max, Math.max(v.min, Number(d) || this.difficulty)); }
+  // never above the network difficulty of the current job: a connection that hard would not submit the hash that is a block
+  clamp(d) { const v = this.vardiff ?? { min: 1e-6, max: 1e9 }; return Math.min(this.job?.netDiff ?? Infinity, v.max, Math.max(v.min, Number(d) || this.difficulty)); }
   // A new difficulty takes effect through a re-sent job under a fresh id, so shares for the old id are still judged at the old difficulty.
   setDiff(c, d, why) {
     d = Number(d.toPrecision(3)); if (d === c.diff) return;
@@ -82,12 +83,13 @@ export class StratumServer {
   floodGuard(c) {
     const now = Date.now(); c.flood ??= { t: now, n: 0, until: 0 };
     if (now - c.flood.t >= 1000) { c.flood.t = now; c.flood.n = 0; }
-    if (++c.flood.n > 100 && now >= c.flood.until) { c.flood.n = 0; c.flood.until = now + 10_000; this.setDiff(c, this.clamp(c.diff * 16), 'flood: over 100 shares a second'); } // then let the backlog drain before judging again
+    if (++c.flood.n > 300 && now >= c.flood.until) { c.flood.n = 0; c.flood.until = now + 10_000; this.setDiff(c, this.clamp(c.diff * 16), 'flood: over 300 shares a second'); } // then let the backlog drain before judging again
   }
   retarget(c) {
     const v = this.vardiff; if (!v || c.fixedDiff || this.paused) return;
     const now = Date.now(), elapsed = (now - c.lastRetarget) / 1000;
     if (c.sharesSince < 8 && elapsed < v.window) return;
+    if (elapsed < 2) return; // a burst of queued submits is not a rate
     const perShare = elapsed / Math.max(c.sharesSince, 0.5);
     let d = c.diff * v.targetSeconds / perShare;
     d = Math.min(c.diff * 4, Math.max(c.diff / 4, d)); d = Math.max(this.clamp(d), c.floorDiff ?? 0); // never below the pool's assignment
