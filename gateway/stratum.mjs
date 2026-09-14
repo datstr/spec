@@ -80,9 +80,9 @@ export class StratumServer {
   pause(on) { if (on === this.paused) return; this.paused = on; const now = Date.now(); for (const c of this.clients) { c.lastRetarget = now; c.sharesSince = 0; } }
   // an ASIC on a CPU-sized target submits thousands of shares a second: raise it at once, above any assignment
   floodGuard(c) {
-    const now = Date.now(); c.flood ??= { t: now, n: 0 };
+    const now = Date.now(); c.flood ??= { t: now, n: 0, until: 0 };
     if (now - c.flood.t >= 1000) { c.flood.t = now; c.flood.n = 0; }
-    if (++c.flood.n > 100) { c.flood.n = 0; c.fixedDiff = null; this.setDiff(c, this.clamp(c.diff * 64), 'flood: over 100 shares a second'); c.floodDiff = c.diff; }
+    if (++c.flood.n > 100 && now >= c.flood.until) { c.flood.n = 0; c.flood.until = now + 10_000; this.setDiff(c, this.clamp(c.diff * 16), 'flood: over 100 shares a second'); } // then let the backlog drain before judging again
   }
   retarget(c) {
     const v = this.vardiff; if (!v || c.fixedDiff || this.paused) return;
@@ -90,7 +90,7 @@ export class StratumServer {
     if (c.sharesSince < 8 && elapsed < v.window) return;
     const perShare = elapsed / Math.max(c.sharesSince, 0.5);
     let d = c.diff * v.targetSeconds / perShare;
-    d = Math.min(c.diff * 4, Math.max(c.diff / 4, d)); d = this.clamp(d);
+    d = Math.min(c.diff * 4, Math.max(c.diff / 4, d)); d = Math.max(this.clamp(d), c.floorDiff ?? 0); // never below the pool's assignment
     if (d / c.diff > 1.4 || d / c.diff < 0.7) this.setDiff(c, d, `${c.sharesSince} shares in ${elapsed.toFixed(0)} s`);
     else { c.sharesSince = 0; c.lastRetarget = now; }
   }

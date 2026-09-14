@@ -90,7 +90,8 @@ const identities = new Map(); // master pubkey → identity, every one the pool 
 // SPEC 8.4: the pool's assignment per master fixes the target its shares are judged and weighed at
 const assignments = new Map(); // master pubkey → { id, target, targetBytes, diff, from }
 const masterOf = (c) => c.identity?.master ?? MASTER;
-function applyAssignment(c) { const a = assignments.get(masterOf(c)); if (!a || !c.subscribed) return; const d = Math.max(a.diff, c.floodDiff ?? 0); if (c.diff !== d) { c.fixedDiff = d; stratum.setDiff(c, d, c.floodDiff && c.floodDiff > a.diff ? 'flood level above the pool assignment' : 'pool assignment'); } }
+// the assignment is the floor of a connection's difficulty: local vardiff may run above it, never below
+function applyAssignment(c) { const a = assignments.get(masterOf(c)); if (!a || !c.subscribed) return; c.floorDiff = a.diff; if (c.diff < a.diff) stratum.setDiff(c, a.diff, 'pool assignment'); }
 function onAssignment(ev) {
   if (!ev || ev.kind !== 23402 || !verifyEvent(ev) || (pool.pubkey && ev.pubkey !== pool.pubkey)) return log('pool: assignment with a bad signature ignored');
   const c = contentOf(ev); if (!c || c.chain !== NETWORK || !/^[0-9a-f]{64}$/i.test(c.target ?? '') || !/^[0-9a-f]{64}$/i.test(c.master ?? '')) return log('pool: malformed assignment ignored');
