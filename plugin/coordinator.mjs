@@ -126,7 +126,7 @@ export class Coordinator {
     conn.onClose(() => { closed = true; clearTimeout(helloTimer); this.clients.delete(conn); const n = (this.byAddress.get(addr) ?? 1) - 1; if (n > 0) this.byAddress.set(addr, n); else this.byAddress.delete(addr); this.log(`gateway ${conn.remote ?? ''} closed`); });
     // messages from one socket are handled in order: a register that follows a hello must see the hello's effect
     let chain = Promise.resolve();
-    conn.onMessage((raw) => { chain = chain.then(() => handle(raw)).catch((e) => this.log(`gateway ${conn.remote ?? ''}: ${e.message}`)); });
+    conn.onMessage((raw) => { chain = chain.then(() => handle(raw)).catch((e) => this.log(`gateway ${conn.remote ?? ''}: ${e.message}`)); return chain; });
     const handle = async (raw) => {
       if (closed) return;
       const size = typeof raw === 'string' ? raw.length : raw.byteLength ?? raw.length ?? 0;
