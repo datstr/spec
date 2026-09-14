@@ -91,7 +91,9 @@ const identities = new Map(); // master pubkey → identity, every one the pool 
 const assignments = new Map(); // master pubkey → { id, target, targetBytes, diff, from }
 const masterOf = (c) => c.identity?.master ?? MASTER;
 // the assignment is the floor of a connection's difficulty: local vardiff may run above it, never below
-function applyAssignment(c) { const a = assignments.get(masterOf(c)); if (!a || !c.subscribed) return; const floor = Math.min(a.diff, current?.netDiff ?? Infinity); c.floorDiff = floor; if (c.diff < floor) stratum.setDiff(c, floor, 'pool assignment'); }
+// a pooled connection mines at its master's assignment: the coordinator's vardiff is the vardiff, and a brief
+// flood at a low assignment is the signal it needs to jump; the gateway's flood guard only keeps the process alive
+function applyAssignment(c) { const a = assignments.get(masterOf(c)); if (!a || !c.subscribed) return; const d = Math.min(a.diff, current?.netDiff ?? Infinity); c.floorDiff = null; if (c.diff !== d) { c.fixedDiff = d; stratum.setDiff(c, d, 'pool assignment'); } }
 function onAssignment(ev) {
   if (!ev || ev.kind !== 23402 || !verifyEvent(ev) || (pool.pubkey && ev.pubkey !== pool.pubkey)) return log('pool: assignment with a bad signature ignored');
   const c = contentOf(ev); if (!c || c.chain !== NETWORK || !/^[0-9a-f]{64}$/i.test(c.target ?? '') || !/^[0-9a-f]{64}$/i.test(c.master ?? '')) return log('pool: malformed assignment ignored');

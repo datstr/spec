@@ -83,7 +83,7 @@ export class StratumServer {
   floodGuard(c) {
     const now = Date.now(); c.flood ??= { t: now, n: 0, until: 0 };
     if (now - c.flood.t >= 1000) { c.flood.t = now; c.flood.n = 0; }
-    if (++c.flood.n > 300 && now >= c.flood.until) { c.flood.n = 0; c.flood.until = now + 10_000; this.setDiff(c, this.clamp(c.diff * 16), 'flood: over 300 shares a second'); } // then let the backlog drain before judging again
+    if (++c.flood.n > 300 && now >= c.flood.until) { c.flood.n = 0; c.flood.until = now + 10_000; c.fixedDiff = null; this.setDiff(c, this.clamp(c.diff * 16), 'flood: over 300 shares a second'); } // then let the backlog drain before judging again; the next assignment takes over
   }
   retarget(c) {
     const v = this.vardiff; if (!v || c.fixedDiff || this.paused) return;
