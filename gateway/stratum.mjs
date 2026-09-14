@@ -47,8 +47,9 @@ export class StratumServer {
     sock.setNoDelay(true);
     sock.on('data', (d) => {
       c.buf += d;
+      // split into lines first: an ASIC's burst of submits can be many lines in one read; only an unterminated line has a size cap
+      let i; while ((i = c.buf.indexOf('\n')) >= 0) { const line = c.buf.slice(0, i); c.buf = c.buf.slice(i + 1); if (line.length > this.maxLineBytes) { this.log(`stratum: ${c.remote} dropped: line over ${this.maxLineBytes} bytes`); return sock.destroy(); } if (line.trim()) this.handle(c, line); }
       if (c.buf.length > this.maxLineBytes) { this.log(`stratum: ${c.remote} dropped: line over ${this.maxLineBytes} bytes`); return sock.destroy(); }
-      let i; while ((i = c.buf.indexOf('\n')) >= 0) { const line = c.buf.slice(0, i); c.buf = c.buf.slice(i + 1); if (line.trim()) this.handle(c, line); }
     });
     sock.on('error', () => {}); sock.on('close', () => { this.clients.delete(c); this.log(`stratum: ${c.remote} closed`); });
     this.log(`stratum: ${c.remote} connected`);
