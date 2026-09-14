@@ -124,7 +124,10 @@ export class Coordinator {
     const kick = (why) => { if (closed) return; closed = true; this.stats.droppedConnections++; this.log(`gateway ${conn.remote ?? ''} dropped: ${why}`); conn.send({ type: 'error', error: why }); try { conn.close?.(); } catch {} };
     const helloTimer = setTimeout(() => { if (!conn.master) kick('no hello'); }, p.helloTimeoutMs);
     conn.onClose(() => { closed = true; clearTimeout(helloTimer); this.clients.delete(conn); const n = (this.byAddress.get(addr) ?? 1) - 1; if (n > 0) this.byAddress.set(addr, n); else this.byAddress.delete(addr); this.log(`gateway ${conn.remote ?? ''} closed`); });
-    conn.onMessage(async (raw) => {
+    // messages from one socket are handled in order: a register that follows a hello must see the hello's effect
+    let chain = Promise.resolve();
+    conn.onMessage((raw) => { chain = chain.then(() => handle(raw)).catch((e) => this.log(`gateway ${conn.remote ?? ''}: ${e.message}`)); });
+    const handle = async (raw) => {
       if (closed) return;
       const size = typeof raw === 'string' ? raw.length : raw.byteLength ?? raw.length ?? 0;
       if (size > p.maxMessageBytes) return kick(`message of ${size} bytes over the ${p.maxMessageBytes} limit`);
@@ -138,7 +141,7 @@ export class Coordinator {
         if (m?.type === 'share') return await this.share(conn, m.event);
         conn.send({ type: 'error', error: `unknown type ${m?.type}` });
       } catch (e) { this.log(`gateway ${conn.remote ?? ''}: ${e.message}`); conn.send({ type: 'error', error: e.message }); }
-    });
+    };
   }
 
   // A gateway registers every identity it mines for: its own at hello, others (clients that brought
