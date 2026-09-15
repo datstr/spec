@@ -90,12 +90,19 @@ accounting. A verifier pays a worker's shares to the payout script of the master
 that delegated it, as of the block being paid.
 
 A **delegation** (kind 33402, addressable by the worker pubkey, signed by the
-master) names the worker, the chains it may mine, and an optional expiry height per
-chain: tags `["d", worker]`, `["chain", id]`, `["p", master]`, content
-`{ master, worker, chains: { <chain id>: { expires: <height or null> } } }`. A share signed
-by a worker after its delegation expired is refused with `delegation-expired`. The gateway
-presents the descriptor and the delegation at hello (section 11.1) and holds only the
-worker key; `gateway/delegate.mjs` produces both where the master key lives.
+master) names the worker, the chains it may mine, an optional expiry height per
+chain, and the worker's consent: tags `["d", worker]`, `["chain", id]`, `["p", master]`,
+content `{ master, worker, chains: { <chain id>: { expires: <height or null> } }, consent }`.
+`consent` is a BIP-340 signature by the worker key over
+`taggedHash("datstr/delegation", master ‖ worker)` (the two pubkeys as 32 raw bytes each),
+made where the worker key is and given to the master before it signs. A delegation whose
+consent is missing or does not verify binds nothing: a verifier ignores it, and a share
+signed by that worker is judged as if no delegation existed. Without consent anyone could
+sign a delegation naming a worker they do not hold and be credited its shares. A share
+signed by a worker after its delegation expired is refused with `delegation-expired`. The
+gateway presents the descriptor and the delegation at hello (section 11.1) and holds only
+the worker key; `gateway/delegate.mjs` produces both where the master key lives, taking the
+consent from the gateway (`GET /consent/<master>` on its API, or `gateway/consent.mjs`).
 
 Delegation is the only trust relationship in the protocol, and it is one-way: a
 worker cannot change where its master is paid.
@@ -193,10 +200,11 @@ the gateway's own identity.
 
 A client with a Nostr key of its own (a browser tab logged in with xlogin, say) can be its
 own master over stratum with two extra methods. `mining.datstr_worker` `[master, address]`
-answers `{ worker, chain, payout }`: the worker pubkey the gateway derives for that master,
-`taggedHash("datstr/worker", gatewayKey ‖ "master:" ‖ chain ‖ ":" ‖ master)`, and the
-address's script. The client signs a miner descriptor (kind 33401) with that payout and a
-delegation (kind 33402) to that worker, and sends both with `mining.datstr_identity`
+answers `{ worker, consent, chain, payout }`: the worker pubkey the gateway derives for that
+master, `taggedHash("datstr/worker", gatewayKey ‖ "master:" ‖ chain ‖ ":" ‖ master)`, that
+worker's consent to the delegation (section 4), and the address's script. The client signs
+a miner descriptor (kind 33401) with that payout and a delegation (kind 33402) to that
+worker carrying the consent, and sends both with `mining.datstr_identity`
 `[descriptor, delegation]`. From then on its shares are signed by the derived worker and
 credited to its master, its coinbase commits to that worker, and the coinbase pays its
 address. The gateway registers every such identity with the coordinator over the same
@@ -251,7 +259,8 @@ named code otherwise:
 
 1. `sig`: NIP-01 id and BIP-340 signature verify. `content`: the content parses.
 2. `delegation-missing`, `delegation-expired`: the worker has a miner descriptor (a worker
-   with none is its own master) or a live delegation for the chain.
+   with none is its own master) or a live delegation for the chain whose consent verifies
+   (section 4).
 3. `chain-unknown`: the chain's kernel schema is loaded.
 4. `header-decode`: the header decodes under the chain's schema and commits to `height`.
 5. `stale`: `height` is at most the verifier's next height and within `staleDepth` of it,
@@ -491,7 +500,7 @@ A gateway talks to a coordinator over one WebSocket carrying JSON messages, each
 
 | from | type | fields |
 |---|---|---|
-| gateway | `hello` | `descriptor`: the miner descriptor event; `delegation`: the delegation event when the signer is a worker; `agent`: software and version |
+| gateway | `hello` | `auth`: a signed hello (below); `descriptor`: the miner descriptor event; `delegation`: the delegation event when the signer is a worker; `agent`: software and version |
 | coordinator | `welcome` | `pool`: the pool descriptor event; `split`: the current split event or null |
 | coordinator | `split` | `event`: a split (section 9.3) |
 | coordinator | `assignment` | `event`: an assignment (section 8.4) for a master the gateway registered; sent after `welcome` and `registered`, and whenever the target moves |
@@ -500,8 +509,20 @@ A gateway talks to a coordinator over one WebSocket carrying JSON messages, each
 | coordinator | `ack` | `event`: an ack (section 8.3) |
 | either | `error` | `error`: text |
 
+**Signed hello.** `auth` proves the socket holds the key it will sign shares with. It is an
+event in the shape of [NIP-98](https://github.com/nostr-protocol/nips/blob/master/98.md):
+kind 27235, signed by the gateway's worker key (the delegation's worker, or the descriptor's
+master when there is no delegation), tags `["u", <the endpoint the gateway dialled>]` and
+`["method", "hello"]`, empty content, `created_at` within 60 seconds of the coordinator's
+clock. The coordinator refuses the hello, and closes the socket, when the signature, the
+key, the method or the freshness fails, when the `u` path is not its endpoint's path (the
+host may differ behind a proxy or a tunnel), or when it has already accepted that event id.
+It goes in the message, not in an HTTP header, so a browser or a proxied socket can send it.
+The proof is per socket: `register` on a proved socket needs none, because a delegation
+already carries the worker's consent and every share is signed by its worker.
+
 A gateway that loses the socket goes solo at once, keeps its receipts, reconnects with
-backoff, and sends `hello` again. Nothing else is stateful on the wire.
+backoff, and sends `hello` again with a fresh `auth`. Nothing else is stateful on the wire.
 
 A coordinator's mount is a [JSS](https://jss.live/) plugin: `activate(api)` registers the
 WebSocket route for gateways, the document routes and the pages, and the plugin directory
@@ -641,6 +662,7 @@ Provisional. All in ranges NIP-01 reserves for ephemeral (2xxxx) and addressable
 | 33400 | pool descriptor | addressable, `d` = chain |
 | 33401 | miner descriptor | addressable, `d` = master |
 | 33402 | delegation | addressable, `d` = worker |
+| 27235 | signed hello (NIP-98 shape) | ephemeral, section 11.1 |
 | 33404 | ledger snapshot | addressable, `d` = chain:height |
 | 33405 | block record | addressable, `d` = chain:hash |
 | 33410 to 33412 | reserved, section 14 | addressable |

@@ -81,8 +81,10 @@ $('height').value = q.get('height') ?? '';
 
 let engine;
 async function loadEngine(network, base) {
-  const [{ createKernel }, { knotsBlake2b }, pow, hash, nostr, split] = await Promise.all([
-    import(`${CDN}/codec/kernel.js`), import(`${CDN}/codec/overlays/knots-blake2b.js`), import(`${CDN}/codec/pow/knots-header-v2.js`), import(`${CDN}/codec/hash.js`), import(`${CDN}/codec/nostr.js`), import(splitLibFor(base))]);
+  const [{ createKernel }, { knotsBlake2b }, pow, hash, nostr, split, secp] = await Promise.all([
+    import(`${CDN}/codec/kernel.js`), import(`${CDN}/codec/overlays/knots-blake2b.js`), import(`${CDN}/codec/pow/knots-header-v2.js`), import(`${CDN}/codec/hash.js`), import(`${CDN}/codec/nostr.js`), import(splitLibFor(base)), import(`${CDN}/codec/secp256k1.js`)]);
+  // SPEC 4: a delegation binds a worker only with the worker's consent, BIP-340 over taggedHash("datstr/delegation", master ‖ worker)
+  const consentOk = (g) => { try { const c = JSON.parse(g.content), w = (c.worker ?? '').toLowerCase(); return /^[0-9a-f]{64}$/.test(w) && !!secp.verifySchnorr(hash.taggedHash('datstr/delegation', hash.hexToBytes(g.pubkey + w)), hash.hexToBytes(c.consent ?? ''), hash.hexToBytes(w)); } catch { return false; } };
   const j = async (p) => (await fetch(`${CDN}/${p}`)).json();
   const overlays = [knotsBlake2b(await j('schema/overlays/knots-blake2b.jsonld'))];
   if (network === 'btc:regtest-blake2b') overlays.push({ graph: { '@graph': [{ '@id': 'btc:regtest-blake2b', '@type': 'btc:NetworkParams', extends: 'btc:regtest', label: 'regtest-blake2b', name: 'regtest-blake2b', powHash: 'knots:blake2b-v2', structVariants: { 'btc:BlockHeader': [{ when: { field: 'version', bit: 31 }, struct: 'knots:BlockHeaderV2' }] }, blake2bHeight: 0, rdtsExpiryTime: 4102444800 }] } });
@@ -110,6 +112,7 @@ async function replay(base, height) {
   let goodDesc = 0; for (const m of masters.values()) if (nostr.verifyNostrEvent(m.descriptor)) goodDesc++;
   check('miner descriptors signed by their masters', goodDesc === masters.size, `${goodDesc} of ${masters.size}`);
   let delegations = new Map(); try { delegations = new Map(lines(await get('delegations.jsonl')).map((d) => [d.worker, d])); } catch {}
+  const delegationOk = (d) => nostr.verifyNostrEvent(d.delegation) && d.delegation.pubkey === d.master && JSON.parse(d.delegation.content).worker === d.worker && consentOk(d.delegation);
   // SPEC 8.4: weights come from assignments the coordinator issued before the work
   const assignments = new Map(), byMaster = new Map();
   try { for (const a of lines(await get('assignments.jsonl'))) { assignments.set(a.id, a); const l = byMaster.get(a.master) ?? []; l.push(a); byMaster.set(a.master, l); } } catch {}
@@ -122,8 +125,8 @@ async function replay(base, height) {
     const valid = a === latest || (!!latest && a === prev && t <= latest.at + grace) || (!!next && a === next);
     return valid && (c.target ?? '').toLowerCase() === a.target && Math.abs(S.difficultyOf(a.target) - s.weight) < 1e-9;
   };
-  if (delegations.size) { let ok = 0; for (const d of delegations.values()) if (nostr.verifyNostrEvent(d.delegation) && d.delegation.pubkey === d.master && JSON.parse(d.delegation.content).worker === d.worker) ok++; check('delegations signed by the masters they name', ok === delegations.size, `${ok} of ${delegations.size} workers`); }
-  const signerOk = (ev, s) => ev.pubkey === s.master || delegations.get(ev.pubkey)?.master === s.master;
+  if (delegations.size) { let ok = 0; for (const d of delegations.values()) if (delegationOk(d)) ok++; check('delegations signed by the masters they name, with the workers\' consent', ok === delegations.size, `${ok} of ${delegations.size} workers`); }
+  const signerOk = (ev, s) => ev.pubkey === s.master || (delegations.get(ev.pubkey)?.master === s.master && delegationOk(delegations.get(ev.pubkey)));
   const shares = lines(await get('shares.jsonl'));
   const snap = JSON.parse(await get(`snapshots/${height}.json`));
   check(`snapshot ${height} loaded`, true, `split ${snap.split.slice(0, 12)}… · ${snap.sharesUpTo} shares credited at issue · need ${num(snap.need, 4)}`);

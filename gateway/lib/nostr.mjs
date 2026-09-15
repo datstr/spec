@@ -2,7 +2,7 @@
 // public-key derivation, which is all a Schnorr signature needs besides hashing), NIP-01 ids,
 // and verification through the engine.
 import { SCHEMA } from './engine.mjs';
-const { publicKeyFromPrivate, N } = await import(`${SCHEMA}/codec/secp256k1.js`);
+const { publicKeyFromPrivate, verifySchnorr, N } = await import(`${SCHEMA}/codec/secp256k1.js`);
 const { sha256, taggedHash, hexToBytes, bytesToHex } = await import(`${SCHEMA}/codec/hash.js`);
 const { verifyNostrEvent } = await import(`${SCHEMA}/codec/nostr.js`);
 
@@ -35,4 +35,31 @@ export function signEvent(privHex, { kind, tags = [], content = '', created_at =
   return ev;
 }
 export const verifyEvent = (ev) => { try { return verifyNostrEvent(ev); } catch { return false; } };
+export const verifySig = (msg32, sigHex, pubkeyHex) => { try { return !!verifySchnorr(msg32, hexToBytes(sigHex), hexToBytes(pubkeyHex)); } catch { return false; } };
+
+// SPEC 4: a worker's consent to a delegation, so nobody can name a worker they do not hold.
+// The worker signs taggedHash("datstr/delegation", master ‖ worker); the master puts the
+// signature in the delegation's content as `consent` before signing the event.
+export const consentMessage = (master, worker) => taggedHash('datstr/delegation', hexToBytes(master + worker));
+export const signConsent = (workerKey, master) => bytesToHex(schnorrSign(consentMessage(master, pubkeyOf(workerKey)), workerKey));
+export const verifyConsent = (delegation) => {
+  const c = content(delegation); const worker = (c?.worker ?? '').toLowerCase();
+  return /^[0-9a-f]{64}$/.test(worker) && /^[0-9a-f]{128}$/i.test(c?.consent ?? '') && verifySig(consentMessage(delegation.pubkey, worker), c.consent, worker);
+};
+
+// SPEC 11.1: a signed hello, shaped like NIP-98 (kind 27235, `u` the endpoint dialled, `method`
+// "hello"), proves the socket holds the key it will sign shares with. Fresh within 60 s.
+export const AUTH_KIND = 27235, AUTH_WINDOW = 60;
+export const signAuth = (key, url, method = 'hello') => signEvent(key, { kind: AUTH_KIND, tags: [['u', url], ['method', method]], content: '' });
+export function checkAuth(ev, { pubkey, path, seen, method = 'hello', now = Math.floor(Date.now() / 1000) }) {
+  if (!ev || ev.kind !== AUTH_KIND || !verifyEvent(ev)) return 'auth: a signed kind 27235 event is needed';
+  if (pubkey && ev.pubkey !== pubkey) return `auth: signed by ${ev.pubkey.slice(0, 16)}…, not the socket's worker ${pubkey.slice(0, 16)}…`;
+  if (Math.abs(now - ev.created_at) > AUTH_WINDOW) return `auth: created_at ${ev.created_at} is outside the ${AUTH_WINDOW} s window`;
+  const tag = (n) => ev.tags.find((t) => t[0] === n)?.[1];
+  if (tag('method') !== method) return `auth: method must be ${method}`;
+  let u; try { u = new URL(tag('u')); } catch { return 'auth: u must be the endpoint dialled'; }
+  if (path && u.pathname !== path) return `auth: u names ${u.pathname}, this endpoint is ${path}`;
+  if (seen) { for (const [id, t] of seen) if (now - t > AUTH_WINDOW * 2) seen.delete(id); if (seen.has(ev.id)) return 'auth: replayed'; seen.set(ev.id, now); }
+  return null;
+}
 export const content = (ev) => { try { return JSON.parse(ev.content); } catch { return null; } };

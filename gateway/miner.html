@@ -136,10 +136,10 @@ async function identify() {
   if (!me) return; if (!pay) { idline(`Nostr master ${esc(me.master.slice(0, 12))}… logged in, but no payout address: enter a tb1p address in "pay to" and press stop, then start`, 'stale'); return log('identity: enter a payout address for this chain in "pay to", then stop and start', 'i'); }
   send({ id: '3', method: 'mining.datstr_worker', params: [me.master, pay] });
 }
-async function signIdentity(worker, chain, payout) {
+async function signIdentity(worker, chain, consent, payout) {
   const now = Math.floor(Date.now() / 1000), M = me.master;
   const descriptor = await window.nostr.signEvent({ kind: 33401, created_at: now, tags: [['d', M], ['chain', chain]], content: JSON.stringify({ chain, payout: { [chain]: payout } }) });
-  const delegation = await window.nostr.signEvent({ kind: 33402, created_at: now, tags: [['d', worker], ['chain', chain], ['p', M]], content: JSON.stringify({ master: M, worker, chains: { [chain]: { expires: null } } }) });
+  const delegation = await window.nostr.signEvent({ kind: 33402, created_at: now, tags: [['d', worker], ['chain', chain], ['p', M]], content: JSON.stringify({ master: M, worker, chains: { [chain]: { expires: null } }, consent }) });
   send({ id: '4', method: 'mining.datstr_identity', params: [descriptor, delegation] });
 }
 const guest = new URLSearchParams(location.hash.slice(1)).get('guest');
@@ -275,7 +275,7 @@ async function onLine(line) {
   let m; try { m = JSON.parse(line); } catch { return; }
   if (m.id === '1' && Array.isArray(m.result)) { en1 = m.result[1]; en2size = m.result[2]; log(`subscribed: extranonce1 ${en1}, extranonce2 ${en2size} bytes`); return; }
   if (m.id === '2') { log(m.result === true ? 'authorized' : 'authorize refused: ' + JSON.stringify(m.error), m.result === true ? 'b' : 'i'); if (m.result === true && me) identify(); return; }
-  if (m.id === '3') { if (m.error) return log('identity: ' + (m.error[1] ?? JSON.stringify(m.error)), 'i'); log(`identity: the gateway derives worker ${m.result.worker.slice(0, 12)}… for my master; signing the descriptor and delegation`); signIdentity(m.result.worker, m.result.chain, m.result.payout).catch((e) => log('identity: signing failed: ' + e.message, 'i')); return; }
+  if (m.id === '3') { if (m.error) return log('identity: ' + (m.error[1] ?? JSON.stringify(m.error)), 'i'); log(`identity: the gateway derives worker ${m.result.worker.slice(0, 12)}… for my master; signing the descriptor and delegation`); signIdentity(m.result.worker, m.result.chain, m.result.consent, m.result.payout).catch((e) => log('identity: signing failed: ' + e.message, 'i')); return; }
   if (m.id === '4') { if (m.error) return log('identity: refused: ' + (m.error[1] ?? JSON.stringify(m.error)), 'i'); log(`identity: mining as master ${m.result.master.slice(0, 12)}…, paid at ${$('pay').value.trim()}`, 'b'); idline(`Nostr master ${esc(m.result.master.slice(0, 12))}… · paid to ${addrLink($('pay').value.trim())} · worker ${esc(m.result.worker.slice(0, 12))}… on the gateway`, 'good'); return; }
   if (pending.has(String(m.id))) { pending.delete(String(m.id)); if (m.result === true) { stats.accepted++; log('share accepted', 'b'); bump(earn.perShare || 1, 'share'); } else { stats.rejected++; log('share rejected: ' + (m.error?.[1] ?? JSON.stringify(m.error)), 'i'); } return; }
   const { parseNotify, targetForDifficulty } = await import(CORE);

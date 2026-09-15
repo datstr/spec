@@ -4,7 +4,7 @@
 // send/onMessage/onClose. Hosted by standalone.mjs or as a JSS plugin (index.mjs).
 import { mkdir, readFile, writeFile, appendFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { signEvent, verifyEvent, content as contentOf, pubkeyOf } from '../gateway/lib/nostr.mjs';
+import { signEvent, verifyEvent, verifyConsent, checkAuth, content as contentOf, pubkeyOf } from '../gateway/lib/nostr.mjs';
 import { rootFromBranches } from '../gateway/lib/merkle.mjs';
 import { computeSplit, windowOf, scaleSplit, difficultyOf } from '../gateway/lib/split.mjs';
 import { meets, targetForDifficulty } from '../gateway/lib/target.mjs';
@@ -65,6 +65,7 @@ export class Coordinator {
     for (const b of [...this.blocks].reverse()) if (b.onChain) await this.creditPaid(b);
     await mkdir(`${this.dataDir}/ledgers`, { recursive: true }); await this.writeLedger('paid');
     this.descriptor = signEvent(this.key, { kind: KIND.pool, tags: [['d', this.chain]], content: { chain: this.chain, ...this.params, endpoints: this.params.endpoints ?? {} } });
+    try { this.authPath = this.params.endpoints?.ws ? new URL(this.params.endpoints.ws).pathname : null; } catch { this.authPath = null; }
     await writeFile(`${this.dataDir}/pool.json`, JSON.stringify(this.descriptor, null, 1));
     this.log(`coordinator ${this.pubkey.slice(0, 16)}… on ${this.chain}: ${this.shares.length} shares, ${this.masters.size} masters, ${this.blocks.length} blocks loaded from ${this.dataDir}`);
     await this.poll();
@@ -161,7 +162,7 @@ export class Coordinator {
       else if (since < 60) continue;                                         // otherwise one step a minute
       else if (n === 0) d = since >= 120 ? d0 / 64 : d0;                    // nothing for two minutes: come down fast
       else d = d0 * p.vardiffSeconds * n / since;
-      d = Math.min(d0 * 256, Math.max(d0 / 64, d)); d = Math.min(maxD, this.tip ? difficultyOf(this.tip.target) : Infinity, Math.max(p.minDifficulty, Number(d.toPrecision(3)))); // never above what a block takes
+      d = Math.min(d0 * 256, Math.max(d0 / 64, d)); d = Math.max(p.minDifficulty, Math.min(maxD, this.tip ? difficultyOf(this.tip.target) : Infinity, Number(d.toPrecision(3)))); // never above what a block takes, never below the pool's floor (regtest: a block takes next to nothing)
       if (d / d0 > 1.4 || d / d0 < 0.7) await this.issueAssignment(master, d, `${n} shares in ${since} s`);
     }
   }
@@ -220,6 +221,7 @@ export class Coordinator {
       if (g.kind !== KIND.delegation || !verifyEvent(g) || g.pubkey !== d.pubkey) return { error: 'delegation must be kind 33402 signed by the descriptor\'s master' };
       const gc = contentOf(g); worker = gc?.worker; const rule = gc?.chains?.[this.chain];
       if (!/^[0-9a-f]{64}$/i.test(worker ?? '') || !rule) return { error: 'delegation names no worker for this chain' };
+      if (!verifyConsent(g)) return { error: 'delegation carries no valid consent from the worker (SPEC 4)' };
       const rec = { worker: worker.toLowerCase(), master: d.pubkey, expires: rule.expires ?? null, delegation: g };
       const old = this.workers.get(rec.worker);
       if (!old || old.delegation.created_at < g.created_at) { this.workers.set(rec.worker, rec); await appendFile(`${this.dataDir}/delegations.jsonl`, JSON.stringify(rec) + '\n'); }
@@ -234,6 +236,9 @@ export class Coordinator {
   async hello(conn, m) {
     const r = await this.register(conn, m);
     if (r.error) return conn.send({ type: 'error', error: r.error });
+    // SPEC 11.1: the hello is signed by the key the socket will sign shares with, fresh, for this endpoint
+    const bad = checkAuth(m.auth, { pubkey: r.worker ?? r.master, path: this.authPath, seen: this.authSeen ??= new Map() });
+    if (bad) { this.stats.refusedConnections++; this.log(`gateway ${conn.remote ?? ''} refused: ${bad}`); conn.send({ type: 'error', error: bad }); try { conn.close?.(); } catch {} return; }
     conn.master = r.master; conn.worker = r.worker; conn.agent = m.agent ?? '';
     this.log(`gateway ${conn.remote ?? ''} hello: master ${r.master.slice(0, 16)}…${r.worker ? ` worker ${r.worker.slice(0, 16)}…` : ''} (${conn.agent})`);
     const split = this.tip && this.splits.get(this.tip.height);

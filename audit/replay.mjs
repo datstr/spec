@@ -8,7 +8,7 @@
 //   node audit/replay.mjs --url http://127.0.0.1:3400 --height <h>
 import { readFile } from 'node:fs/promises';
 import { computeSplit, windowOf, difficultyOf } from '../gateway/lib/split.mjs';
-import { verifyEvent, content as contentOf } from '../gateway/lib/nostr.mjs';
+import { verifyEvent, verifyConsent, content as contentOf } from '../gateway/lib/nostr.mjs';
 
 const args = Object.fromEntries(process.argv.slice(2).map((a, i, all) => a.startsWith('--') ? [a.slice(2), all[i + 1] === undefined || all[i + 1].startsWith('--') ? true : all[i + 1]] : []).filter(Boolean));
 const get = async (p) => args.url ? (await fetch(`${args.url.replace(/\/$/, '')}/${p}`)).text() : readFile(`${args.data}/${p}`, 'utf8');
@@ -16,7 +16,7 @@ const lines = (t) => t.split('\n').filter(Boolean).map((l) => JSON.parse(l));
 const H = Number(args.height);
 const pool = JSON.parse(await get('pool.json')); const params = JSON.parse(pool.content);
 const masters = new Map(lines(await get('masters.jsonl')).map((m) => [m.pubkey, m]));
-let delegations = new Map(); try { delegations = new Map(lines(await get('delegations.jsonl')).map((d) => [d.worker, d])); } catch {}
+let delegations = new Map(); try { delegations = new Map(lines(await get('delegations.jsonl')).filter((d) => verifyEvent(d.delegation) && verifyConsent(d.delegation)).map((d) => [d.worker, d])); } catch {}
 const signerOk = (ev, s) => ev.pubkey === s.master || delegations.get(ev.pubkey)?.master === s.master;
 // SPEC 8.4: a share's weight is the difficulty of the assignment it names, valid for its master at its height
 let assignments = new Map(), byMaster = new Map();

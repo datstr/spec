@@ -4,14 +4,16 @@
 //   node gateway/delegate.mjs --new-master --out <dir>
 //       writes <dir>/master.key (keep it cold) and prints the master pubkey
 //   node gateway/delegate.mjs --master-key-file <dir>/master.key --worker <worker pubkey>
-//       --chain btc:testnet4-blake2b --pay <address> [--expires <height>] --out <dir>
+//       --chain btc:testnet4-blake2b --pay <address> --consent <hex> [--expires <height>] --out <dir>
+//       --consent is the worker's consent to be delegated by this master (SPEC 4): the gateway's
+//       http://<api>/consent/<master pubkey> answers it, or gateway/consent.mjs prints it offline.
 //       writes <dir>/descriptor.json (kind 33401, the master's payout per chain)
 //       and <dir>/delegation-<worker>.json (kind 33402, the worker may mine for the master)
 //   The gateway takes both: serve.mjs --descriptor <file> --delegation <file>
 //   A gateway's worker pubkey is printed at startup and in its stats.json as `worker`.
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { signEvent, randomKey, pubkeyOf } from './lib/nostr.mjs';
+import { signEvent, randomKey, pubkeyOf, verifySig, consentMessage } from './lib/nostr.mjs';
 import { loadEngine } from './lib/engine.mjs';
 
 const args = Object.fromEntries(process.argv.slice(2).map((a, i, all) => a.startsWith('--') ? [a.slice(2), all[i + 1] === undefined || all[i + 1].startsWith('--') ? true : all[i + 1]] : []).filter(Boolean));
@@ -34,8 +36,10 @@ const M = pubkeyOf(master);
 let payout = { [chain]: spk };
 if (existsSync(`${out}/descriptor.json`)) { try { const old = JSON.parse(JSON.parse(await readFile(`${out}/descriptor.json`, 'utf8')).content); payout = { ...old.payout, ...payout }; } catch {} }
 const descriptor = signEvent(master, { kind: 33401, tags: [['d', M], ...Object.keys(payout).map((c) => ['chain', c])], content: { chain, payout } });
+const consent = String(args.consent ?? '').toLowerCase();
+if (!verifySig(consentMessage(M, worker.toLowerCase()), consent, worker.toLowerCase())) throw new Error(`--consent <hex> from the worker is required: GET the gateway's /consent/${M}, or run gateway/consent.mjs where its key is`);
 const expires = args.expires ? Number(args.expires) : null;
-const delegation = signEvent(master, { kind: 33402, tags: [['d', worker], ['chain', chain], ['p', M]], content: { master: M, worker, chains: { [chain]: { expires } } } });
+const delegation = signEvent(master, { kind: 33402, tags: [['d', worker], ['chain', chain], ['p', M]], content: { master: M, worker, chains: { [chain]: { expires } }, consent } });
 await writeFile(`${out}/descriptor.json`, JSON.stringify(descriptor, null, 1));
 await writeFile(`${out}/delegation-${worker.slice(0, 16)}.json`, JSON.stringify(delegation, null, 1));
 console.log(`master ${M}\nworker ${worker} may mine ${chain} for it${expires ? ` until height ${expires}` : ''}, paid to ${args.pay}\nwrote ${out}/descriptor.json and ${out}/delegation-${worker.slice(0, 16)}.json`);

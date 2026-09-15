@@ -68,7 +68,7 @@ export class StratumServer {
   renotify(c, clean = true) { if (this.job && c.subscribed) this.notify(c, this.cloneJob(this.job), clean); }
   setDifficulty(c) { this.send(c, { id: null, method: 'mining.set_difficulty', params: [c.diff] }); }
   // never above the network difficulty of the current job: a connection that hard would not submit the hash that is a block
-  clamp(d) { const v = this.vardiff ?? { min: 1e-6, max: 1e9 }; return Math.min(this.job?.netDiff ?? Infinity, v.max, Math.max(v.min, Number(d) || this.difficulty)); }
+  clamp(d) { const v = this.vardiff ?? { min: 1e-6, max: 1e9 }; return Math.max(v.min, Math.min(this.job?.netDiff ?? Infinity, v.max, Number(d) || this.difficulty)); } // the floor wins over the network cap: on regtest a block takes next to nothing
   // A new difficulty takes effect through a re-sent job under a fresh id, so shares for the old id are still judged at the old difficulty.
   setDiff(c, d, why) {
     d = Number(d.toPrecision(3)); if (d === c.diff) return;

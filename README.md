@@ -23,6 +23,8 @@ gateway/    the datstr gateway: getblocktemplate → datstr coinbase → stratum
   miner.html       the browser miner: a tab as a stratum client over /stratum on the same port,
                    paid at its own address, or its own Nostr master via xlogin (SPEC 7)
   lib/identity.mjs who a client mines as: the gateway, an address, or a delegating master
+  delegate.mjs     where the master key lives: the miner descriptor and a delegation (with the worker's consent)
+  consent.mjs      where the gateway key lives: its consent to a delegation, also served at /consent/<master>
   miner-core.mjs   the miner's arithmetic, shared with test/ws-miner.mjs (a Node stand-in)
   lib/             rpc, engine, block building, targets, nostr signing, merkle, the split
   test/regtest.sh  a block mined through the gateway on a throwaway regtest

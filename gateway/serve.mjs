@@ -41,10 +41,10 @@ import { targetForDifficulty, difficultyOfTarget, meets } from './lib/target.mjs
 import { difficultyOf } from './lib/split.mjs';
 import { StratumServer } from './stratum.mjs';
 import { scriptToAddress } from './lib/address.mjs';
-import { signEvent, randomKey, pubkeyOf, verifyEvent, content as contentOf } from './lib/nostr.mjs';
+import { signEvent, randomKey, pubkeyOf, verifyEvent, content as contentOf, signAuth, signConsent, verifyConsent } from './lib/nostr.mjs';
 import { coinbaseBranches } from './lib/merkle.mjs';
 import { scaleSplit } from './lib/split.mjs';
-import { addressIdentity, delegatedIdentity, workerForMaster } from './lib/identity.mjs';
+import { addressIdentity, delegatedIdentity, workerForMaster, consentForMaster } from './lib/identity.mjs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { SCHEMA } from './lib/engine.mjs';
@@ -79,6 +79,7 @@ const DESCRIPTOR = args.descriptor ? JSON.parse(await readFile(args.descriptor, 
 const DELEGATION = args.delegation ? JSON.parse(await readFile(args.delegation, 'utf8')) : null;
 if (DESCRIPTOR && !verifyEvent(DESCRIPTOR)) throw new Error('--descriptor does not verify');
 if (DELEGATION && (!verifyEvent(DELEGATION) || (contentOf(DELEGATION)?.worker ?? '').toLowerCase() !== WORKER)) throw new Error(`--delegation does not verify or is not for this worker ${WORKER}`);
+if (DELEGATION && !verifyConsent(DELEGATION)) throw new Error(`--delegation carries no valid consent from this worker: make it with the consent gateway/consent.mjs prints for the master`);
 if ((DESCRIPTOR && !DELEGATION) || (!DESCRIPTOR && DELEGATION)) throw new Error('--descriptor and --delegation go together');
 const MASTER = DESCRIPTOR ? DESCRIPTOR.pubkey : WORKER;
 const MASTER_PAYOUT = DESCRIPTOR ? (contentOf(DESCRIPTOR)?.payout?.[NETWORK] ?? '').toLowerCase() : payScripts[0];
@@ -93,7 +94,7 @@ const masterOf = (c) => c.identity?.master ?? MASTER;
 // the assignment is the floor of a connection's difficulty: local vardiff may run above it, never below
 // a pooled connection mines at its master's assignment: the coordinator's vardiff is the vardiff, and a brief
 // flood at a low assignment is the signal it needs to jump; the gateway's flood guard only keeps the process alive
-function applyAssignment(c) { const a = assignments.get(masterOf(c)); if (!a || !c.subscribed) return; const d = Math.min(a.diff, current?.netDiff ?? Infinity); c.floorDiff = null; if (c.diff !== d) { c.fixedDiff = d; stratum.setDiff(c, d, 'pool assignment'); } }
+function applyAssignment(c) { const a = assignments.get(masterOf(c)); if (!a || !c.subscribed) return; const d = Math.max(stratum.vardiff?.min ?? 0, Math.min(a.diff, current?.netDiff ?? Infinity)); c.floorDiff = null; if (c.diff !== d) { c.fixedDiff = d; stratum.setDiff(c, d, 'pool assignment'); } }
 function onAssignment(ev) {
   if (!ev || ev.kind !== 23402 || !verifyEvent(ev) || (pool.pubkey && ev.pubkey !== pool.pubkey)) return log('pool: assignment with a bad signature ignored');
   const c = contentOf(ev); if (!c || c.chain !== NETWORK || !/^[0-9a-f]{64}$/i.test(c.target ?? '') || !/^[0-9a-f]{64}$/i.test(c.master ?? '')) return log('pool: malformed assignment ignored');
@@ -128,7 +129,7 @@ function poolConnect() {
   if (!pool.url) return;
   let ws; try { ws = new WebSocket(pool.url); } catch (e) { log(`pool: ${e.message}`); return setTimeout(poolConnect, pool.backoff); }
   pool.ws = ws;
-  ws.onopen = () => { pool.connected = true; pool.backoff = 1000; log(`pool: connected to ${pool.url} as worker ${WORKER.slice(0, 16)}…${DESCRIPTOR ? ` for master ${MASTER.slice(0, 16)}…` : ''}`); ws.send(JSON.stringify({ type: 'hello', descriptor: descriptor(), ...(DELEGATION ? { delegation: DELEGATION } : {}), agent: VERSION })); for (const id of identities.values()) poolRegister(id); };
+  ws.onopen = () => { pool.connected = true; pool.backoff = 1000; log(`pool: connected to ${pool.url} as worker ${WORKER.slice(0, 16)}…${DESCRIPTOR ? ` for master ${MASTER.slice(0, 16)}…` : ''}`); ws.send(JSON.stringify({ type: 'hello', auth: signAuth(KEY, pool.url), descriptor: descriptor(), ...(DELEGATION ? { delegation: DELEGATION } : {}), agent: VERSION })); for (const id of identities.values()) poolRegister(id); };
   ws.onmessage = async (e) => {
     const raw = typeof e.data === 'string' ? e.data : e.data instanceof Blob ? await e.data.text() : Buffer.from(e.data).toString();
     let m; try { m = JSON.parse(raw); } catch { return; }
@@ -220,7 +221,7 @@ const stratum = new StratumServer({ difficulty: DIFF, vardiff: VARDIFF, log, max
       const master = String(params[0] ?? '').toLowerCase(); if (!/^[0-9a-f]{64}$/.test(master)) throw new Error('master pubkey needed');
       const address = params[1] ? String(params[1]).trim() : null; const payout = address ? script.addressToScript(address, k.params) : null;
       if (address && !payout) throw new Error(`not an address for ${NETWORK}: ${address}`);
-      return { worker: workerForMaster({ hash, gatewayKey: KEY, chain: NETWORK, master }).pubkey, chain: NETWORK, payout };
+      return { ...consentForMaster({ hash, gatewayKey: KEY, chain: NETWORK, master }), chain: NETWORK, payout };
     }
     if (method === 'mining.datstr_identity') { const id = identityForDelegation(params[0], params[1]); c.identity = id; stratum.renotify(c, true); applyAssignment(c); return { master: id.master, worker: id.pubkey, payout: id.payout }; }
     return undefined;
@@ -338,6 +339,8 @@ if (args.api !== 'false') {
     const cors = { 'access-control-allow-origin': '*' };
     if (req.method === 'OPTIONS') { res.writeHead(204, { ...cors, 'access-control-allow-headers': 'range', 'access-control-allow-methods': 'GET, HEAD, OPTIONS' }); return res.end(); }
     if (path === '/stats.json') { res.writeHead(200, { 'content-type': 'application/json', ...cors }); return res.end(JSON.stringify(snapshot())); }
+    // this gateway's own worker key consenting to a delegation from a master (SPEC 4), for delegate.mjs where the master key lives
+    if (/^\/consent\/[0-9a-f]{64}$/i.test(path)) { res.writeHead(200, { 'content-type': 'application/json', ...cors }); return res.end(JSON.stringify({ chain: NETWORK, master: path.slice(9).toLowerCase(), worker: WORKER, consent: signConsent(KEY, path.slice(9).toLowerCase()) })); }
     if (path === '/') { res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }); return res.end(await file('./status.html')); }
     if (path === '/miner') {
       // the page's own URL for its Open Graph tags: the host and prefix it was reached through (haproxy passes X-Forwarded-Proto; a prefix comes through X-Forwarded-Prefix or is unknown)

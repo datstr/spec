@@ -6,7 +6,7 @@
 //             the worker key the gateway derives for that master (xlogin on the miner page)
 // Derived keys are never stored: taggedHash("datstr/worker", gatewayKey ‖ label), so a restart
 // derives the same worker for the same address or master.
-import { signEvent, verifyEvent, pubkeyOf, content as contentOf } from './nostr.mjs';
+import { signEvent, verifyEvent, verifyConsent, signConsent, pubkeyOf, content as contentOf } from './nostr.mjs';
 
 export function deriveWorker(hash, gatewayKeyHex, label) {
   const key = hash.bytesToHex(hash.taggedHash('datstr/worker', new Uint8Array([...hash.hexToBytes(gatewayKeyHex), ...new TextEncoder().encode(label)])));
@@ -21,6 +21,8 @@ export function addressIdentity({ hash, gatewayKey, chain, address, payout }) {
 
 // The worker a master would delegate to on this gateway: what the miner page asks for before signing.
 export function workerForMaster({ hash, gatewayKey, chain, master }) { return deriveWorker(hash, gatewayKey, `master:${chain}:${master}`); }
+// ...and that worker's consent to be delegated by the master (SPEC 4), for the master to sign into the delegation
+export function consentForMaster({ hash, gatewayKey, chain, master }) { const w = workerForMaster({ hash, gatewayKey, chain, master }); return { worker: w.pubkey, consent: signConsent(w.key, master) }; }
 
 export function delegatedIdentity({ hash, gatewayKey, chain, descriptor, delegation }) {
   if (!descriptor || descriptor.kind !== 33401 || !verifyEvent(descriptor)) throw new Error('descriptor must be a signed kind 33401 event');
@@ -33,5 +35,6 @@ export function delegatedIdentity({ hash, gatewayKey, chain, descriptor, delegat
   const dc = contentOf(delegation);
   if ((dc?.worker ?? '').toLowerCase() !== w.pubkey) throw new Error(`delegation names worker ${(dc?.worker ?? '').slice(0, 16)}…, this gateway derives ${w.pubkey.slice(0, 16)}… for that master`);
   if (!dc?.chains?.[chain]) throw new Error(`delegation does not cover ${chain}`);
+  if (!verifyConsent(delegation)) throw new Error('delegation carries no valid consent from the worker');
   return { mode: 'delegated', key: w.key, pubkey: w.pubkey, master, payout, address: null, descriptor, delegation, expires: dc.chains[chain].expires ?? null };
 }

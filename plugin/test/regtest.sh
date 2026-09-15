@@ -54,8 +54,13 @@ curl -sf "$CO_URL/pool.json" >/dev/null || { tail -20 "$WORK/co.log"; fail "coor
 step "a master key for B, delegating to B's worker key (made off the gateway)"
 node "$HERE/gateway/delegate.mjs" --new-master --out "$WORK/master-b" | sed 's/^/  /'
 WORKER_B=$(node -e "import('$HERE/gateway/lib/nostr.mjs').then(m => console.log(m.pubkeyOf('$KEY_B')))")
-node "$HERE/gateway/delegate.mjs" --master-key-file "$WORK/master-b/master.key" --worker "$WORKER_B" --chain btc:regtest-blake2b --activation $ACTIVATION --pay $PAY_B --out "$WORK/master-b" | sed 's/^/  /'
-MASTER_B=$(python3 -c "import json; print(json.load(open('$WORK/master-b/descriptor.json'))['pubkey'])")
+MASTER_B=$(node -e "import('$HERE/gateway/lib/nostr.mjs').then(m => console.log(m.pubkeyOf(require('fs').readFileSync('$WORK/master-b/master.key','utf8').trim())))")
+# the worker's consent (SPEC 4) comes from where the gateway key is; a running gateway also serves it at /consent/<master>
+CONSENT_B=$(node "$HERE/gateway/consent.mjs" --key $KEY_B --master "$MASTER_B" --chain btc:regtest-blake2b | python3 -c "import json,sys; print(json.load(sys.stdin)['consent'])")
+node "$HERE/gateway/delegate.mjs" --master-key-file "$WORK/master-b/master.key" --worker "$WORKER_B" --chain btc:regtest-blake2b --activation $ACTIVATION --pay $PAY_B --consent "$CONSENT_B" --out "$WORK/master-b" | sed 's/^/  /'
+step "a delegation without the worker's consent is refused by the gateway"
+NOCONSENT=$(node "$HERE/gateway/delegate.mjs" --master-key-file "$WORK/master-b/master.key" --worker "$WORKER_B" --chain btc:regtest-blake2b --activation $ACTIVATION --pay $PAY_B --out "$WORK/no-consent" 2>&1 || true)
+case "$NOCONSENT" in *consent*) echo "  refused without --consent";; *) fail "delegate.mjs accepted a delegation without consent";; esac
 
 step "two gateways (B delegated), two miners"
 node "$HERE/gateway/serve.mjs" "${COMMON[@]}" --pay $PAY_A --key $KEY_A --port $ST_A --api $API_A --diff 1 --poll 1 --pool "$CO_WS" > "$WORK/gw-a.log" 2>&1 & PIDS+=($!)
