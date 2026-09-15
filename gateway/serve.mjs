@@ -206,6 +206,11 @@ function makeJob(t) {
   };
 }
 
+// One block per height. Once the node accepts a block, further solutions for that height are competing
+// blocks for a height already won and are not submitted. Submissions are serialised: a rig on a
+// minimum-difficulty target solves a block per share, and a burst of parallel submitblock calls once
+// overflowed the node's work queue and exhausted its file descriptors.
+let solvedHeight = -1; let submitQueue = Promise.resolve(); let skipNoted = -1;
 const stratum = new StratumServer({ difficulty: DIFF, vardiff: VARDIFF, log, maxClients: Number(args['max-clients'] ?? 1024),
   // a username that is a payable address makes the client its own identity, paid there (SPEC 7)
   onAuthorize: async (c, user) => { const addr = user.split('.')[0].trim(); const id = addr ? identityForAddress(addr) : null; if (id) c.identity = id; applyAssignment(c); },
@@ -247,9 +252,11 @@ const stratum = new StratumServer({ difficulty: DIFF, vardiff: VARDIFF, log, max
   else { cs.local = (cs.local ?? 0) + 1; stats.local = (stats.local ?? 0) + 1; }
   log(`share ${d.blockHash.slice(0, 20)}… job ${job.id} h${job.height} diff ${diff} ${user}${id.mode === 'gateway' ? '' : ` (${id.mode} master ${id.master.slice(0, 8)}…)`}${isBlock ? ' BLOCK' : ''}${stale ? ' (stale job)' : ''}${job.splitId === 'solo' ? '' : ' split ' + job.splitId.slice(0, 8)}${forward ? '' : throttled ? ' (local: throttled)' : a ? ' (local: above the assignment target)' : ' (local: no assignment yet)'}`);
   if (isBlock && job.height > STOP) { log(`BLOCK ${d.blockHash} at height ${job.height} NOT submitted: above --stop-height ${STOP}`); return { ok: true }; }
+  if (isBlock && (stale || job.height <= solvedHeight)) { if (skipNoted !== job.height) { skipNoted = job.height; log(`BLOCK ${d.blockHash} height ${job.height} not submitted: ${stale ? 'stale job' : 'height already solved'} (further ones for this height are dropped quietly)`); } return { ok: true }; }
   if (isBlock) {
-    const hex = blockHex;
-    const r = await rpc('submitblock', hex);
+    const r = await (submitQueue = submitQueue.catch(() => {}).then(() => job.height <= solvedHeight ? undefined : rpc('submitblock', blockHex)));
+    if (r === undefined) return { ok: true };
+    if (r === null) solvedHeight = Math.max(solvedHeight, job.height);
     blocks.unshift({ height: job.height, hash: d.blockHash, time: Math.floor(Date.now() / 1000), user, master: id.master, coinbase: v.block.cbTxid, commitment: v.block.commitment, value: job.template.coinbasevalue, txs: v.block.transactions.length, accepted: r === null, result: r });
     if (blocks.length > 200) blocks.pop();
     if (r === null) { stats.blocks++; log(`BLOCK ${d.blockHash} height ${job.height} accepted by the node, coinbase ${v.block.cbTxid}, commitment ${v.block.commitment.slice(0, 16)}…`); await refresh(true); }
