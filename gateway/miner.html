@@ -78,7 +78,7 @@
 <div class="earn" id="clock" style="grid-template-columns:auto 1fr;gap:1.4rem"><div><div class="label" id="clocklabel">next window</div><div class="counter" id="countdown" style="color:var(--accent)">–</div></div><div class="motd" id="clocknote"></div></div>
 <div class="hero" id="hero"></div>
 <section><h2>Log</h2><pre id="log"></pre></section>
-<div class="panel" id="who" style="margin-top:.75rem"><span class="label">identity</span> <span id="idline" class="motd">not logged in: mining as an address, or as the gateway</span> <span class="motd">· <a href="#" id="loginlink">log in with Nostr</a> to mine as your own master</span></div>
+<div class="panel" id="who" style="margin-top:.75rem"><span class="label">identity</span> <span id="idline" class="motd">not logged in: mining as an address, or as the gateway</span> <span class="motd">· <a href="#" id="loginlink">log in with Nostr</a> to mine as your own master · <a href="#" id="genkey">no key? generate one and start</a></span> <span class="motd" id="keybox"></span></div>
 <footer>Hashing: <code>blake2b.js</code> from <code>bitcoin-desktop/schema@v0.0.25</code> in web workers; the job format is the Sia dialect the gateway serves to hardware. A tab is a stratum client like any ASIC, paid at the address in its username.</footer>
 <script type="module">
 const $ = (id) => document.getElementById(id);
@@ -130,6 +130,16 @@ const adoptLogin = () => { if (!me && window.xlogin?.type === 'nostr' && window.
 { let tries = 0; const t = setInterval(() => { adoptLogin(); if (me || ++tries > 20) clearInterval(t); }, 250); }
 document.addEventListener('xlogout', () => { me = null; showIdentity(); log('logged out'); });
 $('loginlink').onclick = (e) => { e.preventDefault(); window.xlogin?.login(); };
+// one click for someone with no key: a fresh key, saved in this browser by xlogin's guest login, shown once to copy, then mining starts
+$('genkey').onclick = async (e) => {
+  e.preventDefault(); if (!window.xlogin?.guestLogin) return log('xlogin is not loaded yet, try again in a moment', 'i');
+  const k = Array.from(crypto.getRandomValues(new Uint8Array(32)), (b) => b.toString(16).padStart(2, '0')).join('');
+  await window.xlogin.guestLogin(k); adoptLogin();
+  $('keybox').innerHTML = `· your key <code>${k}</code> <a href="#" id="copykey">copy</a> — it lives only in this browser; save it, it is the only way to spend what you earn`;
+  $('copykey').onclick = async (ev) => { ev.preventDefault(); try { await navigator.clipboard.writeText(k); log('key copied', 'b'); } catch { log('copy failed: select the key and copy it by hand', 'i'); } };
+  log(`new key generated and saved in this browser: ${k} — save it somewhere; it is the only way to spend what you earn`, 'b');
+  if (!ws) start();
+};
 $('pay').onchange = showIdentity;
 async function identify() {
   const pay = $('pay').value.trim();
@@ -149,7 +159,7 @@ let gatewayPay = null;
 fetch(new URL('stats.json', location.href), { cache: 'no-store' }).then((r) => r.json()).then((s) => { gatewayPay = s.pay?.[0] ? s.pay[0] + '.tab' : null; if (gatewayPay) $('user').placeholder = gatewayPay; }).catch(() => {});
 $('diff').value = q.get('diff') ?? localStorage.getItem('datstr.diff') ?? '';
 $('workers').value = q.get('workers') ?? Math.max(1, (navigator.hardwareConcurrency || 4) - 1);
-$('winonly').checked = q.get('winonly') === '1' || localStorage.getItem('datstr.winonly') === '1';
+$('winonly').checked = q.get('winonly') === '1' || (q.get('winonly') !== '0' && localStorage.getItem('datstr.winonly') !== '0'); // on by default: no point hashing outside the window
 $('winonly').onchange = () => { localStorage.setItem('datstr.winonly', $('winonly').checked ? '1' : '0'); dispatch(); };
 let sleeping = false;
 const inWindow = () => !$('winonly').checked || !job?.bits || job.bits.toLowerCase() === $('minbits').value.trim().toLowerCase();
