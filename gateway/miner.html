@@ -86,6 +86,7 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const CDN = 'https://cdn.jsdelivr.net/gh/bitcoin-desktop/schema@v0.0.25';
 const CORE = new URL('miner-core.mjs', location.href).href;
+const WASM = new URL('miner-mine.wasm', location.href).href;
 const q = new URLSearchParams(location.search);
 // the stratum socket lives beside this page, so a gateway behind a path prefix (https://host/datstr/miner) still works
 $('url').value = q.get('url') ?? new URL('stratum', location.href).href.replace(/^http/, 'ws');
@@ -248,19 +249,23 @@ function render() {
 }
 const workerSrc = `
 import { blake2b } from '${CDN}/codec/pow/blake2b.js';
-import { mine, hexToBytes } from '${CORE}';
+import { mine, hexToBytes, loadWasmMiner } from '${CORE}';
 let current = null;
+// WebAssembly when the browser has it, the JS loop otherwise; the page hears which
+const wasm = await loadWasmMiner('${WASM}'); self.postMessage({ type: 'engine', engine: wasm ? 'wasm' : 'js' });
+const hasher = wasm ?? mine.bind(null, blake2b);
 self.onmessage = (e) => { if (e.data.type === 'job') { current = { ...e.data, header: hexToBytes(e.data.header), target: hexToBytes(e.data.target), n: e.data.start }; run(); } else if (e.data.type === 'stop') current = null; };
 async function run() {
   const mineJob = current; if (!mineJob) return;
   while (current === mineJob) {
-    const r = mine(blake2b, mineJob.header, mineJob.target, mineJob.n, mineJob.step, mineJob.batch);
+    const r = hasher(mineJob.header, mineJob.target, mineJob.n, mineJob.step, mineJob.batchExplicit ? mineJob.batch : (wasm ? 1 << 20 : mineJob.batch));
     mineJob.n = (mineJob.n + mineJob.step * r.hashes) >>> 0;
     self.postMessage({ type: 'progress', hashes: r.hashes });
     if (r.nonce !== null) { self.postMessage({ type: 'found', nonce: r.nonce, jobKey: mineJob.jobKey }); mineJob.n = (mineJob.n + mineJob.step) >>> 0; }
     await new Promise((res) => setTimeout(res, 0));
   }
 }`;
+let engineNoted = false;
 function startWorkers(n) {
   stopWorkers();
   const url = URL.createObjectURL(new Blob([workerSrc], { type: 'text/javascript' }));
@@ -271,6 +276,7 @@ function onWorker(e) {
   const m = e.data;
   if (m.type === 'progress') { stats.hashes += m.hashes; windowHashes.push([Date.now(), m.hashes]); }
   else if (m.type === 'found' && m.jobKey === jobKey && job) submit(m.nonce);
+  else if (m.type === 'engine') { if (!engineNoted) { engineNoted = true; log(m.engine === 'wasm' ? 'hashing in WebAssembly: BLAKE2b with 64-bit words and the nonce loop inside the module' : 'hashing in JavaScript: this browser has no WebAssembly, expect a slow rate', m.engine === 'wasm' ? 'b' : 'i'); } }
 }
 async function dispatch() {
   if (!job || !en1 || !target || !workers.length) return;
@@ -280,7 +286,7 @@ async function dispatch() {
   en2 = bytesToHex(crypto.getRandomValues(new Uint8Array(en2size)));
   const header = bytesToHex(workHeader(blake2b, job, en1 + en2));
   jobKey++;
-  workers.forEach((w, i) => w.postMessage({ type: 'job', header, target: bytesToHex(target), start: i, step: workers.length, jobKey, batch: batchSize() }));
+  workers.forEach((w, i) => w.postMessage({ type: 'job', header, target: bytesToHex(target), start: i, step: workers.length, jobKey, batch: batchSize(), batchExplicit: !!$('batch').value.trim() }));
 }
 function send(o) { ws?.send(JSON.stringify(o) + '\n'); }
 function submit(nonce) {

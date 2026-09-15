@@ -348,6 +348,7 @@ if (args.api !== 'false') {
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }); return res.end((await file('./miner.html')).replace('{{URL}}', `${proto}://${host}${prefix}/miner`));
     }
     if (path === '/miner-core.mjs') { res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', ...cors }); return res.end(await file('./miner-core.mjs')); }
+    if (path === '/miner-mine.wasm') { res.writeHead(200, { 'content-type': 'application/wasm', ...cors }); return res.end(await readFile(new URL('./miner-mine.wasm', import.meta.url))); }
     // large files this gateway offers (UTXO snapshots for the chain), with Range requests for webseeds: --files <dir>
     if (path.startsWith('/snapshots/') && args.files) {
       const name = path.slice(11); if (!/^[A-Za-z0-9._-]+$/.test(name)) { res.writeHead(404, cors); return res.end('not found'); }

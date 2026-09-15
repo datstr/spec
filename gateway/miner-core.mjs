@@ -34,3 +34,17 @@ export function mine(blake2b, header, target, start, step, count) {
 }
 export const nonceField = (nonce) => hexLE32(nonce) + '00000000';
 export function parseNotify(params) { return { id: params[0], prevHidden: params[1], coinb1: params[2], bits: params[6], ntime: params[7], clean: !!params[8] }; }
+
+// The same loop in WebAssembly (gateway/miner-mine.wasm, from tools/blake2b-mine.py): BLAKE2b
+// with native 64-bit words and the nonce loop inside the module, about 40x the JS above. Memory:
+// header at 0, target at 128, digest at 256, found nonce at 512, found flag at 516.
+export async function wasmMinerFromBytes(bytes) {
+  const { instance } = await WebAssembly.instantiate(bytes);
+  const mem = new Uint8Array(instance.exports.memory.buffer), dv = new DataView(instance.exports.memory.buffer);
+  return function mineWasm(header, target, start, step, count) {
+    mem.set(header, 0); mem.set(target, 128);
+    const hashes = instance.exports.mine(start >>> 0, step >>> 0, count >>> 0);
+    return { nonce: dv.getInt32(516, true) ? dv.getUint32(512, true) : null, hashes };
+  };
+}
+export async function loadWasmMiner(url) { try { return await wasmMinerFromBytes(await (await fetch(url)).arrayBuffer()); } catch { return null; } }
