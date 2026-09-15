@@ -78,6 +78,7 @@ All in the pool descriptor (`/pool.json`), signed by the coordinator's key.
 | `maxMessageBytes` | 4 MiB | largest message accepted (a share carrying a full block fits) |
 | `maxMessagesPerSecond` | 200 | per connection, with a burst of twice that; over it the socket is dropped |
 | `helloTimeoutMs` | 15000 | a socket that sends no hello in this time is dropped |
+| `requireAuth` | false | require the signed hello (SPEC 11.1); otherwise it is checked only when present |
 
 ## What it serves
 

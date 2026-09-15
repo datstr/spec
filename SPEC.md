@@ -509,14 +509,20 @@ A gateway talks to a coordinator over one WebSocket carrying JSON messages, each
 | coordinator | `ack` | `event`: an ack (section 8.3) |
 | either | `error` | `error`: text |
 
-**Signed hello.** `auth` proves the socket holds the key it will sign shares with. It is an
-event in the shape of [NIP-98](https://github.com/nostr-protocol/nips/blob/master/98.md):
+**Signed hello (optional).** `auth` proves the socket holds the key it will sign shares
+with. It is a nice to have, not a requirement: with consent in every delegation (section 4)
+and every share signed by its worker, a replayed delegation on a stranger's socket earns
+nothing, so the proof only refuses unknown gateways at the door. A gateway should send it;
+a coordinator verifies it when present, refuses a hello whose `auth` is present and bad,
+and requires it only when its descriptor says `requireAuth: true`. It is an event in the
+shape of [NIP-98](https://github.com/nostr-protocol/nips/blob/master/98.md):
 kind 27235, signed by the gateway's worker key (the delegation's worker, or the descriptor's
 master when there is no delegation), tags `["u", <the endpoint the gateway dialled>]` and
 `["method", "hello"]`, empty content, `created_at` within 60 seconds of the coordinator's
-clock. The coordinator refuses the hello, and closes the socket, when the signature, the
-key, the method or the freshness fails, when the `u` path is not its endpoint's path (the
-host may differ behind a proxy or a tunnel), or when it has already accepted that event id.
+clock. A coordinator that checks it refuses the hello, and closes the socket, when the
+signature, the key, the method or the freshness fails, when the `u` path is not its
+endpoint's path (the host may differ behind a proxy or a tunnel), or when it has already
+accepted that event id.
 It goes in the message, not in an HTTP header, so a browser or a proxied socket can send it.
 The proof is per socket: `register` on a proved socket needs none, because a delegation
 already carries the worker's consent and every share is signed by its worker.

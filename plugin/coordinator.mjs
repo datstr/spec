@@ -22,7 +22,7 @@ export const KIND = { share: 23400, ack: 23401, assignment: 23402, split: 23403,
 const RULES = ['segwit', 'blake2b'];
 const DEFAULTS = { feeBps: 0, feeScript: null, windowMultiple: 2, windowMinWeight: 0, minDifficulty: 1, startDifficulty: 1, vardiffSeconds: 10, assignmentGrace: 120, maxDifficulty: 1e8, minPayout: 546, maxOutputs: 512, staleDepth: 3, splitGrace: 30, poll: 1, splitDelayMs: 500,
   // socket hygiene: connections in all and per remote address, bytes per message, messages per second per connection (burst is twice that)
-  maxConnections: 256, maxPerAddress: 16, maxMessageBytes: 4 * 1024 * 1024, maxMessagesPerSecond: 500, helloTimeoutMs: 15000 };
+  maxConnections: 256, maxPerAddress: 16, maxMessageBytes: 4 * 1024 * 1024, maxMessagesPerSecond: 500, helloTimeoutMs: 15000, requireAuth: false };
 
 export class Coordinator {
   constructor({ k, pow, hash, rpc, key, params, dataDir, log = console.log }) {
@@ -236,8 +236,8 @@ export class Coordinator {
   async hello(conn, m) {
     const r = await this.register(conn, m);
     if (r.error) return conn.send({ type: 'error', error: r.error });
-    // SPEC 11.1: the hello is signed by the key the socket will sign shares with, fresh, for this endpoint
-    const bad = checkAuth(m.auth, { pubkey: r.worker ?? r.master, path: this.authPath, seen: this.authSeen ??= new Map() });
+    // SPEC 11.1: a signed hello is optional; checked when present, required only with requireAuth
+    const bad = (m.auth || this.params.requireAuth) ? checkAuth(m.auth, { pubkey: r.worker ?? r.master, path: this.authPath, seen: this.authSeen ??= new Map() }) : null;
     if (bad) { this.stats.refusedConnections++; this.log(`gateway ${conn.remote ?? ''} refused: ${bad}`); conn.send({ type: 'error', error: bad }); try { conn.close?.(); } catch {} return; }
     conn.master = r.master; conn.worker = r.worker; conn.agent = m.agent ?? '';
     this.log(`gateway ${conn.remote ?? ''} hello: master ${r.master.slice(0, 16)}…${r.worker ? ` worker ${r.worker.slice(0, 16)}…` : ''} (${conn.agent})`);
