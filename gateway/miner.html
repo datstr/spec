@@ -69,6 +69,7 @@
   <label>difficulty (blank = vardiff) <input id="diff" placeholder="0.001"></label>
   <label>workers <input id="workers" type="number" min="1" max="64"></label>
   <label>batch (hashes between checks) <input id="batch" type="number" min="1" placeholder="65536"></label>
+  <label>webassembly <span style="display:flex;gap:.5rem;align-items:center;text-transform:none;letter-spacing:0;color:var(--fg)"><input id="wasm" type="checkbox" style="width:auto"> hash in WebAssembly, about 40x faster</span></label>
   <label>windows only <span style="display:flex;gap:.5rem;align-items:center;text-transform:none;letter-spacing:0;color:var(--fg)"><input id="winonly" type="checkbox" style="width:auto"> sleep unless the job's bits are <input id="minbits" value="1d00ffff" style="width:7rem"></span></label>
   <button type="submit" id="go">start</button>
 </form>
@@ -164,6 +165,9 @@ $('diff').value = q.get('diff') ?? localStorage.getItem('datstr.diff') ?? '';
 $('batch').value = q.get('batch') ?? localStorage.getItem('datstr.batch') ?? '';
 const batchSize = () => Math.max(1, Math.floor(Number($('batch').value) || 65536));
 $('batch').onchange = () => { localStorage.setItem('datstr.batch', $('batch').value.trim()); if (job) dispatch(); };
+// WebAssembly is opt in: the workers are built with or without it, so a change restarts them
+$('wasm').checked = q.get('wasm') === '1' || localStorage.getItem('datstr.wasm') === '1';
+$('wasm').onchange = () => { localStorage.setItem('datstr.wasm', $('wasm').checked ? '1' : '0'); engineNoted = false; if (ws) { startWorkers(workers.length || Number($('workers').value) || 1); if (job) dispatch(); } };
 $('workers').value = q.get('workers') ?? Math.max(1, (navigator.hardwareConcurrency || 4) - 1);
 $('winonly').checked = q.get('winonly') === '1' || (q.get('winonly') !== '0' && localStorage.getItem('datstr.winonly') !== '0'); // on by default: no point hashing outside the window
 $('winonly').onchange = () => { localStorage.setItem('datstr.winonly', $('winonly').checked ? '1' : '0'); dispatch(); };
@@ -247,12 +251,12 @@ function render() {
   $('hr').textContent = ws ? '~' + hr(rate) : '';
   $('hero').innerHTML = [tile('Hashrate', ws ? '~' + hr(rate) : '-', `${workers.length} workers`), tile('Shares', `${stats.accepted}`, `${stats.rejected} rejected`), tile('Difficulty', stats.diff ?? '-', stats.diff ? `~${hr(stats.diff * 4294967296 / 10)} for a share every 10 s` : 'from the gateway'), tile('Job', stats.job ? esc(stats.job.slice(0, 10)) : '-', job ? (sleeping ? 'sleeping, bits ' + esc(job.bits) : (job.bits?.toLowerCase() === $('minbits').value.trim().toLowerCase() ? 'min-difficulty window' : 'bits ' + esc(job.bits))) : 'waiting'), tile('Running', stats.started ? Math.floor((now - stats.started) / 1000) + ' s' : '-', `${stats.hashes.toLocaleString()} hashes`)].join('');
 }
-const workerSrc = `
+const workerSrc = () => { const useWasm = $('wasm').checked; return `
 import { blake2b } from '${CDN}/codec/pow/blake2b.js';
 import { mine, hexToBytes, loadWasmMiner } from '${CORE}';
 let current = null;
 // WebAssembly when the browser has it, the JS loop otherwise; the page hears which
-const wasm = await loadWasmMiner('${WASM}'); self.postMessage({ type: 'engine', engine: wasm ? 'wasm' : 'js' });
+const wasm = ${useWasm} ? await loadWasmMiner('${WASM}') : null; self.postMessage({ type: 'engine', engine: wasm ? 'wasm' : 'js', wanted: ${useWasm} });
 const hasher = wasm ?? mine.bind(null, blake2b);
 self.onmessage = (e) => { if (e.data.type === 'job') { current = { ...e.data, header: hexToBytes(e.data.header), target: hexToBytes(e.data.target), n: e.data.start }; run(); } else if (e.data.type === 'stop') current = null; };
 async function run() {
@@ -264,11 +268,11 @@ async function run() {
     if (r.nonce !== null) { self.postMessage({ type: 'found', nonce: r.nonce, jobKey: mineJob.jobKey }); mineJob.n = (mineJob.n + mineJob.step) >>> 0; }
     await new Promise((res) => setTimeout(res, 0));
   }
-}`;
+}`; };
 let engineNoted = false;
 function startWorkers(n) {
   stopWorkers();
-  const url = URL.createObjectURL(new Blob([workerSrc], { type: 'text/javascript' }));
+  const url = URL.createObjectURL(new Blob([workerSrc()], { type: 'text/javascript' }));
   for (let i = 0; i < n; i++) { const w = new Worker(url, { type: 'module' }); w.onmessage = onWorker; w.onerror = (e) => log('worker error: ' + e.message, 'i'); workers.push(w); }
 }
 function stopWorkers() { for (const w of workers) w.terminate(); workers = []; }
@@ -276,7 +280,7 @@ function onWorker(e) {
   const m = e.data;
   if (m.type === 'progress') { stats.hashes += m.hashes; windowHashes.push([Date.now(), m.hashes]); }
   else if (m.type === 'found' && m.jobKey === jobKey && job) submit(m.nonce);
-  else if (m.type === 'engine') { if (!engineNoted) { engineNoted = true; log(m.engine === 'wasm' ? 'hashing in WebAssembly: BLAKE2b with 64-bit words and the nonce loop inside the module' : 'hashing in JavaScript: this browser has no WebAssembly, expect a slow rate', m.engine === 'wasm' ? 'b' : 'i'); } }
+  else if (m.type === 'engine') { if (!engineNoted) { engineNoted = true; log(m.engine === 'wasm' ? 'hashing in WebAssembly: BLAKE2b with 64-bit words and the nonce loop inside the module' : m.wanted ? 'hashing in JavaScript: WebAssembly was asked for but did not load in this browser' : 'hashing in JavaScript; tick "webassembly" for about 40x', m.engine === 'wasm' ? 'b' : 'i'); } }
 }
 async function dispatch() {
   if (!job || !en1 || !target || !workers.length) return;
