@@ -68,6 +68,7 @@
   <label>name <input id="user" placeholder="tab"></label>
   <label>difficulty (blank = vardiff) <input id="diff" placeholder="0.001"></label>
   <label>workers <input id="workers" type="number" min="1" max="64"></label>
+  <label>batch (hashes between checks) <input id="batch" type="number" min="1" placeholder="65536"></label>
   <label>windows only <span style="display:flex;gap:.5rem;align-items:center;text-transform:none;letter-spacing:0;color:var(--fg)"><input id="winonly" type="checkbox" style="width:auto"> sleep unless the job's bits are <input id="minbits" value="1d00ffff" style="width:7rem"></span></label>
   <button type="submit" id="go">start</button>
 </form>
@@ -158,6 +159,10 @@ if (guest) window.addEventListener('load', () => { const t = setInterval(() => {
 let gatewayPay = null;
 fetch(new URL('stats.json', location.href), { cache: 'no-store' }).then((r) => r.json()).then((s) => { gatewayPay = s.pay?.[0] ? s.pay[0] + '.tab' : null; if (gatewayPay) $('user').placeholder = gatewayPay; }).catch(() => {});
 $('diff').value = q.get('diff') ?? localStorage.getItem('datstr.diff') ?? '';
+// hashes a worker runs between checking for a new job: bigger is faster (less per-batch overhead), slower to notice a job change
+$('batch').value = q.get('batch') ?? localStorage.getItem('datstr.batch') ?? '';
+const batchSize = () => Math.max(1, Math.floor(Number($('batch').value) || 65536));
+$('batch').onchange = () => { localStorage.setItem('datstr.batch', $('batch').value.trim()); if (job) dispatch(); };
 $('workers').value = q.get('workers') ?? Math.max(1, (navigator.hardwareConcurrency || 4) - 1);
 $('winonly').checked = q.get('winonly') === '1' || (q.get('winonly') !== '0' && localStorage.getItem('datstr.winonly') !== '0'); // on by default: no point hashing outside the window
 $('winonly').onchange = () => { localStorage.setItem('datstr.winonly', $('winonly').checked ? '1' : '0'); dispatch(); };
@@ -249,7 +254,7 @@ self.onmessage = (e) => { if (e.data.type === 'job') { current = { ...e.data, he
 async function run() {
   const mineJob = current; if (!mineJob) return;
   while (current === mineJob) {
-    const r = mine(blake2b, mineJob.header, mineJob.target, mineJob.n, mineJob.step, 4096);
+    const r = mine(blake2b, mineJob.header, mineJob.target, mineJob.n, mineJob.step, mineJob.batch);
     mineJob.n = (mineJob.n + mineJob.step * r.hashes) >>> 0;
     self.postMessage({ type: 'progress', hashes: r.hashes });
     if (r.nonce !== null) { self.postMessage({ type: 'found', nonce: r.nonce, jobKey: mineJob.jobKey }); mineJob.n = (mineJob.n + mineJob.step) >>> 0; }
@@ -275,7 +280,7 @@ async function dispatch() {
   en2 = bytesToHex(crypto.getRandomValues(new Uint8Array(en2size)));
   const header = bytesToHex(workHeader(blake2b, job, en1 + en2));
   jobKey++;
-  workers.forEach((w, i) => w.postMessage({ type: 'job', header, target: bytesToHex(target), start: i, step: workers.length, jobKey }));
+  workers.forEach((w, i) => w.postMessage({ type: 'job', header, target: bytesToHex(target), start: i, step: workers.length, jobKey, batch: batchSize() }));
 }
 function send(o) { ws?.send(JSON.stringify(o) + '\n'); }
 function submit(nonce) {
