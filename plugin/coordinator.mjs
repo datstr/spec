@@ -151,19 +151,53 @@ export class Coordinator {
     if (now - this.lastRetarget < 10) return; this.lastRetarget = now;
     const p = this.params, maxD = p.maxDifficulty ?? 1e8;
     const connected = new Set(); for (const c of this.clients) for (const m of c.identities ?? []) connected.add(m);
+    // Which masters have shown any sign of life lately. A rig that produced a share in the last
+    // ten minutes is present, whatever one quiet window says; one that has produced nothing is
+    // either gone or holding an assignment it can never satisfy, and those need opposite cures.
+    const active = new Set(), activeSince = now - 600;
+    for (let i = this.shares.length - 1; i >= 0 && this.shares[i].at >= activeSince; i--) active.add(this.shares[i].master);
+    for (let i = this.recentReceipts.length - 1; i >= 0 && this.recentReceipts[i].at >= activeSince; i--) active.add(this.recentReceipts[i].master);
     for (const master of connected) {
       const cur = this.currentAssignment(master); if (!cur) continue;
-      const since = now - cur.at; let n = 0;
-      for (let i = this.shares.length - 1; i >= 0 && this.shares[i].at >= cur.at; i--) if (this.shares[i].master === master) n++;
-      for (let i = this.recentReceipts.length - 1; i >= 0 && this.recentReceipts[i].at >= cur.at; i--) if (this.recentReceipts[i].master === master) n++; // receipts prove the rate too
+      // rate over a recent window (a rig reconnecting to a day-old assignment must be able to climb),
+      // ignoring the first seconds after an assignment change (shares mined at the old difficulty are
+      // still in flight and would read as a flood at the new one), and only shares that name this assignment
+      // 300 s, not 120: at the target of one share per 10 s a window holds ~25 shares, so its
+      // count noise (~20%) sits inside the ±40% deadband below. At 120 s it held ~12 (~30%),
+      // which fired on a quarter of all checks and kept the loop oscillating.
+      const settle = 15, windowStart = Math.max(cur.at + settle, now - (p.vardiffWindow ?? 300));
+      const since = now - windowStart; if (since < 5) continue; let n = 0;
+      for (let i = this.shares.length - 1; i >= 0 && this.shares[i].at >= windowStart; i--) if (this.shares[i].master === master && this.shares[i].assignment === cur.id) n++;
+      for (let i = this.recentReceipts.length - 1; i >= 0 && this.recentReceipts[i].at >= windowStart; i--) if (this.recentReceipts[i].master === master) n++; // receipts prove the rate too
       const d0 = difficultyOf(cur.target); let d;
+
+      // ckpool's cadence: adjust after 72 shares at this difficulty, or 240 s, whichever comes
+      // first. Without it a fast miner retargets every few seconds and thrashes.
+      const age = now - cur.at, cadence = p.vardiffCadence ?? 240;
+      if (n < 72 && age < cadence) continue;
       if (d0 >= maxD) d = Math.min(maxD, 1000);                              // a runaway: back to a level any ASIC produces shares at within a minute
-      else if (n >= 200 && since >= 5) d = d0 * p.vardiffSeconds * n / since; // a flood: go straight to the measured rate
-      else if (since < 60) continue;                                         // otherwise one step a minute
-      else if (n === 0) d = since >= 120 ? d0 / 64 : d0;                    // nothing for two minutes: come down fast
-      else d = d0 * p.vardiffSeconds * n / since;
-      d = Math.min(d0 * 256, Math.max(d0 / 64, d)); d = Math.max(p.minDifficulty, Math.min(maxD, this.tip ? difficultyOf(this.tip.target) : Infinity, Number(d.toPrecision(3)))); // never above what a block takes, never below the pool's floor (regtest: a block takes next to nothing)
-      if (d / d0 > 1.4 || d / d0 < 0.7) await this.issueAssignment(master, d, `${n} shares in ${since} s`);
+      // Nothing this window. A rig still producing elsewhere in the last ten minutes has merely
+      // gone quiet -- right after a rise the expected count is small, and a proxy hiccup reads
+      // identically -- so halve, which one upward step undoes. A rig with no shares at all is
+      // absent or mis-assigned: come down hard so it reaches a workable level quickly.
+      else if (n === 0) d = age >= cadence ? (active.has(master) ? d0 / 2 : d0 / 64) : d0;
+      else {
+        // The window says the rate fits `est`. A window of ~12 shares carries ±30% noise, and
+        // moving the whole way on every sample made the loop alternate between a high window
+        // and a low one for hours (17 -> 8 -> 17 shares): a step up of 1.75x leaves the next
+        // window expecting 7, which steps down, which leaves it expecting 21, and so on. So:
+        // leave a window that reads within ±40% of right alone, and when one does not, move
+        // only to the geometric mean of here and there -- half the error in log space. A real
+        // 16x error still closes in three steps; a noisy one no longer reverses the next.
+        const est = d0 * p.vardiffSeconds * n / since;
+        if (est / d0 < 1.4 && est / d0 > 0.7) continue;
+        d = Math.sqrt(d0 * est);
+      }
+      // asymmetric caps: climb fast enough to protect credit, descend slowly so one quiet
+      // sample cannot collapse a miner. Silence and runaway set d directly and bound themselves.
+      if (n > 0) d = Math.min(d0 * 16, Math.max(d0 / 4, d));
+      d = Math.max(p.minDifficulty, Math.min(maxD, this.tip ? difficultyOf(this.tip.target) : Infinity, Number(d.toPrecision(3)))); // never above what a block takes, never below the pool's floor
+      if (d / d0 > 1.05 || d / d0 < 0.95) await this.issueAssignment(master, d, `${n} shares in ${since} s`); // the deadband was applied above; this only stops a clamp-induced no-op
     }
   }
 
