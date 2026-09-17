@@ -37,6 +37,7 @@ function makeStub({ params = {}, startDifficulty = 1000, netDifficulty = 8.5e8 }
     assignments: new Map(), assignmentsByMaster: new Map(),
     shares: [], recentReceipts: [], lastRetarget: 0,
     tip: { target: hash.bytesToHex(targetForDifficulty(netDifficulty)) },
+    networkDifficulty() { return netDifficulty; }, // datstr/pool's Pool asks this way instead of reading the tip
     hash,
     changes: [],
     log: () => {},
@@ -171,7 +172,10 @@ const scenarios = {
 };
 
 const which = process.argv[2];
-const retarget = Coordinator.prototype.retargetAssignments;
+// VARDIFF_IMPL=/path/to/module.mjs:ClassName borrows another implementation of the same
+// method -- datstr/pool's Pool carries a port of this loop and must pass the same scenarios.
+let retarget = Coordinator.prototype.retargetAssignments;
+if (process.env.VARDIFF_IMPL) { const [mod, cls] = process.env.VARDIFF_IMPL.split(':'); retarget = (await import(mod))[cls].prototype.retargetAssignments; console.log(`retarget borrowed from ${cls} in ${mod}\n`); }
 let all = true;
 for (const [name, fn] of Object.entries(scenarios)) {
   if (which && which !== name) continue;
