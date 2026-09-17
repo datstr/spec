@@ -14,13 +14,19 @@ import { targetForDifficulty } from './lib/target.mjs';
 // mining.suggest_difficulty. The difficulty a share is judged at is the one its job was sent
 // at: a change re-sends the current job under a new id, so ids pin difficulties.
 export class StratumServer {
-  constructor({ onShare, onAuthorize = null, onMethod = null, difficulty = 1, vardiff = null, log = console.log, maxClients = 1024, maxLineBytes = 16384, maxPerAddress = 64 }) {
+  constructor({ onShare, onAuthorize = null, onMethod = null, difficulty = 1, vardiff = null, log = console.log, maxClients = 1024, maxLineBytes = 16384, maxPerAddress = 64, idleSeconds = 1800, rawLog = false }) {
     this.onShare = onShare; this.onAuthorize = onAuthorize; this.onMethod = onMethod; this.difficulty = difficulty; this.log = log;
     this.maxClients = maxClients; this.maxLineBytes = maxLineBytes; this.maxPerAddress = maxPerAddress; this.refused = 0;
+    // a rig spreads its hash over several sockets, so any one of them can be legitimately quiet for
+    // minutes. Only a much longer silence means a dead peer behind a proxy.
+    this.idleSeconds = idleSeconds; this.rawLog = rawLog;
     this.vardiff = vardiff && { targetSeconds: 10, min: 0.0001, max: 1e6, window: 60, ...vardiff };
     this.clients = new Set(); this.job = null; this.jobs = new Map(); this.sid = 0; this.clone = 0;
     this.server = net.createServer((sock) => this.accept(sock));
     if (this.vardiff) this.timer = setInterval(() => { for (const c of this.clients) if (c.subscribed) this.retarget(c); }, 5000);
+    // a subscribed client that has sent nothing for idleSeconds is hung or behind a dead proxy: hang up so it reconnects
+    this.idleTimer = setInterval(() => { const now = Date.now(), ms = (this.idleSeconds ?? 1800) * 1000;
+      for (const c of this.clients) if (c.subscribed && now - (c.lastSeen ?? now) > ms) { this.log(`stratum: ${c.remote} dropped: silent for ${Math.round((now - c.lastSeen) / 1000)} s`); try { c.sock.destroy(); } catch {} } }, 15000);
   }
   oneSharePerJob(c) { return /^sia-test-miner/.test(c.agent ?? ''); }
   // The same job under a new id, with the header's spare nonce3 (the high half of the ntime field)
@@ -44,23 +50,25 @@ export class StratumServer {
     if (this.clients.size >= this.maxClients || same >= this.maxPerAddress) { this.refused++; this.log(`stratum: ${addr} refused: ${this.clients.size >= this.maxClients ? 'max clients' : 'max per address'}`); return sock.destroy(); }
     const c = { sock, buf: '', subscribed: false, user: null, en1: null, remote: `${sock.remoteAddress}:${sock.remotePort}`, diff: this.difficulty, fixedDiff: null, jobDiff: new Map(), since: Date.now(), sharesSince: 0, lastRetarget: Date.now() };
     this.clients.add(c);
-    sock.setNoDelay(true);
+    sock.setNoDelay(true); sock.setKeepAlive(true, 30000); // a dead peer behind a proxy must not look alive forever
+    c.lastSeen = Date.now();
     sock.on('data', (d) => {
+      c.lastSeen = Date.now();
       c.buf += d;
       // split into lines first: an ASIC's burst of submits can be many lines in one read; only an unterminated line has a size cap
-      let i; while ((i = c.buf.indexOf('\n')) >= 0) { const line = c.buf.slice(0, i); c.buf = c.buf.slice(i + 1); if (line.length > this.maxLineBytes) { this.log(`stratum: ${c.remote} dropped: line over ${this.maxLineBytes} bytes`); return sock.destroy(); } if (line.trim()) this.handle(c, line); }
+      let i; while ((i = c.buf.indexOf('\n')) >= 0) { const line = c.buf.slice(0, i); c.buf = c.buf.slice(i + 1); if (this.rawLog) this.log(`RAW IN  ${c.remote}: ${line.slice(0, 300)}`); if (line.length > this.maxLineBytes) { this.log(`stratum: ${c.remote} dropped: line over ${this.maxLineBytes} bytes`); return sock.destroy(); } if (line.trim()) this.handle(c, line); }
       if (c.buf.length > this.maxLineBytes) { this.log(`stratum: ${c.remote} dropped: line over ${this.maxLineBytes} bytes`); return sock.destroy(); }
     });
     sock.on('error', () => {}); sock.on('close', () => { this.clients.delete(c); this.log(`stratum: ${c.remote} closed`); });
     this.log(`stratum: ${c.remote} connected`);
   }
-  send(c, obj) { if (!c.sock.destroyed) c.sock.write(JSON.stringify(obj) + '\n'); }
+  send(c, obj) { if (this.rawLog) this.log(`RAW OUT ${c.remote}: ${JSON.stringify(obj).slice(0, 300)}`); if (!c.sock.destroyed) c.sock.write(JSON.stringify(obj) + '\n'); }
   reply(c, id, result) { this.send(c, { id, result, error: null }); }
   refuse(c, id, code, msg) { this.send(c, { id, result: null, error: [code, msg, null] }); }
 
   // A job may differ per client (its coinbase commits to the client's identity): job.variant(c) says how.
   notify(c, job, clean) {
-    c.jobDiff.set(job.id, c.diff); if (c.jobDiff.size > 16) c.jobDiff.delete(c.jobDiff.keys().next().value);
+    c.jobDiff.set(job.id, c.diff); if (c.jobDiff.size > 128) c.jobDiff.delete(c.jobDiff.keys().next().value); // must outlast the retained jobs, or an old job's share is judged at the wrong difficulty
     const v = job.variant ? job.variant(c) : job;
     this.send(c, { id: null, method: 'mining.notify', params: [job.id, v.prevHidden, v.coinb1, '', [], '', v.bits, job.ntimeField ?? v.ntimeField, !!clean] });
   }
@@ -73,7 +81,9 @@ export class StratumServer {
   setDiff(c, d, why) {
     d = Number(d.toPrecision(3)); if (d === c.diff) return;
     const from = c.diff; c.diff = d; this.setDifficulty(c);
-    if (this.job && c.subscribed) this.notify(c, this.cloneJob(this.job), false);
+    // clean: the miner must abandon work on jobs issued at the old target, or it keeps mining them
+    // and every such share is judged at the old difficulty. cloneJob bumps ntime so it is not deduped.
+    if (this.job && c.subscribed) this.notify(c, this.cloneJob(this.job), true);
     this.log(`stratum: ${c.remote} difficulty ${from} → ${d} (${why})`);
     c.sharesSince = 0; c.lastRetarget = Date.now();
   }
@@ -129,7 +139,9 @@ export class StratumServer {
       case 'mining.submit': {
         const [user, jobId, en2, ntime, nonce] = params.map((p) => String(p ?? ''));
         const job = this.jobs.get(jobId);
-        if (!job) return this.refuse(c, id, 21, 'job not found');
+        if (!job) { c.notFound = (c.notFound ?? 0) + 1; this.stale = (this.stale ?? 0) + 1;
+          if (c.notFound <= 3 || c.notFound % 100 === 0) this.log(`stratum: ${c.remote} job ${jobId} not found (${c.notFound} for this client; a marketplace counts these as rejects)`);
+          return this.refuse(c, id, 21, 'job not found'); }
         if (!/^[0-9a-f]{16}$/i.test(en2) || !/^[0-9a-f]{16}$/i.test(ntime) || !/^[0-9a-f]{16}$/i.test(nonce)) return this.refuse(c, id, 20, 'bad field size');
         const le = (h, at) => parseInt(h.slice(at, at + 8).match(/../g).reverse().join(''), 16);
         const fields = { extranonce: (c.en1 + en2).toLowerCase(), nonce: le(nonce, 0), nonce2: le(nonce, 8), timeOffset: le(ntime, 0), nonce3: le(ntime, 8) };

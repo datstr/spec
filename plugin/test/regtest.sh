@@ -11,7 +11,7 @@ set -euo pipefail
 BITCOIND=${BITCOIND:-$HOME/bitcoin-knots/src/build/bin/bitcoind}
 BITCOIN_CLI=${BITCOIN_CLI:-$HOME/bitcoin-knots/src/build/bin/bitcoin-cli}
 SIA_TEST_MINER=${SIA_TEST_MINER:-$HOME/remote/github.com/iohzrd/ratum/target/release/sia-test-miner}
-TIMEOUT=${TIMEOUT:-400}; BLOCKS=${BLOCKS:-6}; KEEP=0; [ "${1:-}" = "--keep" ] && KEEP=1
+TIMEOUT=${TIMEOUT:-400}; BLOCKS=${BLOCKS:-12}; KEEP=0; [ "${1:-}" = "--keep" ] && KEEP=1
 HOST=${HOST:-standalone}
 # a jss with --plugin support (JSS 0.0.219 or later); jspod bundles one
 JSS=${JSS:-$HOME/.nvm/versions/node/v24.16.0/lib/node_modules/jspod/node_modules/.bin/jss}

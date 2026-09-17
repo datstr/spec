@@ -137,6 +137,8 @@ function poolConnect() {
       pool.pubkey = m.pool?.pubkey ?? null; if (m.split) onSplit(m.split); log(`pool: welcome from ${pool.pubkey?.slice(0, 16)}…`);
       // never serve a difficulty the pool would refuse: its floor becomes vardiff's floor
       const floor = Number(contentOf(m.pool)?.minDifficulty);
+      const start = Number(contentOf(m.pool)?.startDifficulty);
+      if (start > 0) stratum.difficulty = Math.max(stratum.difficulty, start); // a new connection is offered the pool's starting difficulty, never a target far below it: a big rig floods itself before its first assignment arrives
       if (floor > 0 && stratum.vardiff && stratum.vardiff.min < floor) { stratum.vardiff.min = floor; log(`pool: minimum difficulty ${floor}, vardiff floor raised to it`); for (const c of stratum.clients) if (c.subscribed && c.diff < floor) stratum.setDiff(c, floor, 'pool minimum'); }
     }
     else if (m.type === 'split') onSplit(m.event);
@@ -212,7 +214,7 @@ function makeJob(t) {
 // minimum-difficulty target solves a block per share, and a burst of parallel submitblock calls once
 // overflowed the node's work queue and exhausted its file descriptors.
 let solvedHeight = -1; let submitQueue = Promise.resolve(); let skipNoted = -1;
-const stratum = new StratumServer({ difficulty: DIFF, vardiff: VARDIFF, log, maxClients: Number(args['max-clients'] ?? 1024),
+const stratum = new StratumServer({ rawLog: !!args['raw-log'], idleSeconds: Number(args['idle-seconds'] ?? 1800), difficulty: DIFF, vardiff: VARDIFF, log, maxClients: Number(args['max-clients'] ?? 1024),
   // a username that is a payable address makes the client its own identity, paid there (SPEC 7)
   onAuthorize: async (c, user) => { const addr = user.split('.')[0].trim(); const id = addr ? identityForAddress(addr) : null; if (id) c.identity = id; applyAssignment(c); },
   // the miner page's identity flow (xlogin): which worker this gateway derives for a master, then the signed descriptor and delegation
@@ -242,10 +244,13 @@ const stratum = new StratumServer({ difficulty: DIFF, vardiff: VARDIFF, log, max
   // pooled work is judged at the pool's assignment for this master, whatever the local difficulty:
   // a hash above that target is a local receipt only; a solo share carries the local target and weighs nothing
   const a = job.splitId === 'solo' ? null : assignments.get(id.master);
-  // at most 50 forwarded shares a second per identity: an ASIC landing on a CPU target floods until the pool's vardiff catches up
+  // At most 150 *forwarded* shares a second per identity. The budget must only be spent on
+  // shares that would actually be sent: counting local receipts here let a miner's own hashes
+  // eat the allowance and silently drop its creditable shares, under-crediting a fast rig.
   const bucket = (id.forward ??= { t: Date.now(), n: 0 }); const nowMs = Date.now(); if (nowMs - bucket.t >= 1000) { bucket.t = nowMs; bucket.n = 0; }
-  const throttled = ++bucket.n > 150;
-  const forward = !throttled && (job.splitId === 'solo' || (a && a.from <= job.height && meets(powBytes, a.targetBytes)));
+  const creditable = job.splitId === 'solo' || (a && a.from <= job.height && meets(powBytes, a.targetBytes));
+  const throttled = creditable && ++bucket.n > 150;
+  const forward = creditable && !throttled;
   if (forward) poolSend({ type: 'share', event: signEvent(id.key, { kind: 23400, tags: [['chain', NETWORK], ['h', String(job.height)], ['split', job.splitId]], content: {
     chain: NETWORK, height: job.height, header: k.codec.encodeHex('BlockHeader', header), coinbase: k.codec.encodeHex('Transaction', v.block.coinbase), branches: v.branches,
     target: a ? a.target : bytesToHex(target), ...(a ? { assignment: a.id } : {}), split: job.splitId, parents: [], job: job.id, ...(blockHex && job.height <= STOP ? { block: blockHex } : {}),
@@ -294,7 +299,7 @@ async function refresh(force) {
   if (!force && current && !tip && !bits && !txs && !old) return;
   if (tip) { seen = new Set(); try { const h = await rpc('getblockheader', t.previousblockhash); tipInfo = { height: h.height, hash: h.hash, time: h.time }; } catch { tipInfo = null; } }
   current = makeJob(t);
-  stratum.publish(current, tip); stratum.retire(8);
+  stratum.publish(current, tip); stratum.retire(64) /* a miner with work in flight must not be refused 'job not found': every difficulty change mints a new job id, and a marketplace counts each refusal as a reject */;
   log(`job ${current.id} h${t.height} prev ${t.previousblockhash.slice(0, 16)}… bits ${t.bits} txs ${t.transactions.length} value ${t.coinbasevalue} ${current.splitId === 'solo' ? 'solo' : 'split ' + current.splitId.slice(0, 8) + ' (' + current.block.nSplit + ' outputs)'}${tip ? ' (new tip)' : bits ? ' (bits changed)' : txs ? ' (mempool)' : ' (refresh)'}`);
 }
 
