@@ -5,7 +5,7 @@
 # and the gateways keep mining solo while the coordinator is down and rejoin when it returns.
 #
 #   plugin/test/regtest.sh [--keep]
-#   BITCOIND, BITCOIN_CLI, SIA_TEST_MINER, TIMEOUT (default 400), BLOCKS (pooled blocks, default 6)
+#   BITCOIND, BITCOIN_CLI, SIA_TEST_MINER, TIMEOUT (default 400), BLOCKS (pooled blocks, default 12)
 #   HOST=standalone (default) or HOST=jss: the coordinator as a JSS plugin on a throwaway jss
 set -euo pipefail
 BITCOIND=${BITCOIND:-$HOME/bitcoin-knots/src/build/bin/bitcoind}
@@ -67,7 +67,7 @@ node "$HERE/gateway/serve.mjs" "${COMMON[@]}" --pay $PAY_A --key $KEY_A --port $
 node "$HERE/gateway/serve.mjs" "${COMMON[@]}" --pay $PAY_B --key $KEY_B --port $ST_B --api $API_B --diff 1 --poll 1 --pool "$CO_WS" --descriptor "$WORK/master-b/descriptor.json" --delegation "$WORK/master-b/delegation-${WORKER_B:0:16}.json" > "$WORK/gw-b.log" 2>&1 & PIDS+=($!)
 waitfor "$WORK/gw-a.log" 'pool: welcome' && waitfor "$WORK/gw-b.log" 'pool: welcome' || { tail -5 "$WORK/gw-a.log" "$WORK/gw-b.log" "$WORK/co.log"; fail "gateways did not join the coordinator"; }
 # usernames that are not addresses: an address username would make the miner its own identity (SPEC 7)
-"$SIA_TEST_MINER" 127.0.0.1:$ST_A "rig.a" > "$WORK/miner-a.log" 2>&1 & PIDS+=($!)
+"$SIA_TEST_MINER" 127.0.0.1:$ST_A "rig.a" > "$WORK/miner-a.log" 2>&1 & MINER_A=$!; PIDS+=($MINER_A)
 "$SIA_TEST_MINER" 127.0.0.1:$ST_B "rig.b" > "$WORK/miner-b.log" 2>&1 & PIDS+=($!)
 
 TARGET=$((ACTIVATION + BLOCKS))
@@ -128,5 +128,37 @@ for _ in $(seq 60); do [ "$(grep -c 'pool: welcome' "$WORK/gw-a.log")" -ge 2 ] &
 [ "$(grep -c 'pool: welcome' "$WORK/gw-a.log")" -ge 2 ] || fail "gateway A did not rejoin"
 echo "  reloaded $BEFORE shares; both gateways rejoined"
 
-step "passed: two gateways paid by one coinbase, replay matches, solo fallback and rejoin work"
+step "a gateway whose own master has left the window still accepts the split (SPEC 9.3 guard)"
+# A's own miner stops; a miner bringing its own address mines through A instead (SPEC 7). The window
+# soon holds only B's and C's shares, so the split pays B and C and not A's master. A must accept it:
+# A's *master* has nothing in the window, whatever A forwarded on C's behalf. (17 Sep 2026: a guard
+# that counted every forwarded share as the master's refused every such split and left the live
+# gateway mining solo for hours; the earlier steps never see it because A's own miner is always paid.)
+kill $MINER_A 2>/dev/null || true
+PAY_C=$(node -e "import('$HERE/gateway/lib/address.mjs').then(m => console.log(m.scriptToAddress('0014' + '33'.repeat(20), 'bcrt')))")
+SPK_C=0014$(printf '33%.0s' $(seq 20))
+"$SIA_TEST_MINER" 127.0.0.1:$ST_A "$PAY_C" > "$WORK/miner-c.log" 2>&1 & PIDS+=($!)
+waitfor "$WORK/gw-a.log" 'identity: address' 40 || fail "gateway A did not make an identity for C's address"
+REFUSED_BEFORE=$(grep -c 'REFUSED: my shares' "$WORK/gw-a.log" || true)
+deadline=$((SECONDS + 150)); OK=0
+while [ $SECONDS -lt $deadline ]; do
+  if curl -sf "http://127.0.0.1:$API_A/stats.json" | python3 -c "
+import json,sys; s=json.load(sys.stdin); j=s.get('job') or {}; outs=[o['address'] for o in s.get('coinbaser',[])]
+sys.exit(0 if j.get('payout')=='pool split' and '$PAY_C' in outs and '$PAY_A' not in outs else 1)" 2>/dev/null; then OK=1; break; fi
+  sleep 1
+done
+REFUSED_AFTER=$(grep -c 'REFUSED: my shares' "$WORK/gw-a.log" || true)
+[ "$REFUSED_AFTER" -eq "$REFUSED_BEFORE" ] || { grep 'REFUSED' "$WORK/gw-a.log" | tail -2 | sed 's/^/  /'; fail "gateway A refused a split that pays C and not its own master: the guard counted C's shares as A's"; }
+[ $OK = 1 ] || { curl -sf "http://127.0.0.1:$API_A/stats.json" | python3 -c "import json,sys; s=json.load(sys.stdin); print('  job:', s.get('job',{}).get('payout'), [o['address'] for o in s.get('coinbaser',[])])"; fail "gateway A never served a split paying C and not A within 150s"; }
+echo "  gateway A mines the split paying C and B with its own master out of the window, no refusal"
+deadline=$((SECONDS + 150)); PAID_C=""
+while [ $SECONDS -lt $deadline ]; do
+  hh=$(cli getblockcount); for h in $(seq $hh -1 $((hh - 3))); do
+    if cli getblock "$(cli getblockhash $h)" 2 | python3 -c "import json,sys; b=json.load(sys.stdin); sys.exit(0 if any(o['scriptPubKey']['hex']=='$SPK_C' for o in b['tx'][0]['vout']) else 1)" 2>/dev/null; then PAID_C=$h; break 2; fi
+  done; sleep 2
+done
+[ -n "$PAID_C" ] || fail "no block within 150s paid C's script"
+echo "  block $PAID_C pays C"
+
+step "passed: two gateways paid by one coinbase, replay matches, solo fallback and rejoin work, guard accepts a split its master is not in"
 curl -sf "$CO_URL/stats.json" | python3 -c "import json,sys; s=json.load(sys.stdin); print('shares credited:', s['shares_total']); print('blocks recorded:', s['stats']['blocks'])"

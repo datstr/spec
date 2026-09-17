@@ -118,7 +118,12 @@ function identityForDelegation(desc, deleg) {
   if (!old || old.descriptor.created_at < id.descriptor.created_at) { identities.set(id.master, id); poolRegister(id); log(`identity: master ${id.master.slice(0, 12)}… delegated to worker ${id.pubkey.slice(0, 12)}…, paid at its descriptor's script`); }
   return identities.get(id.master);
 }
-const ackedSeqs = []; // seq of every share the coordinator credited, for the split guard
+// For the split guard (SPEC 9.3): the seq of every share the coordinator credited to THIS
+// gateway's own master. Shares forwarded on behalf of other identities (an address a miner
+// brought, a delegating master) are theirs, not ours: counting them here made the guard see
+// "my shares" in every window and refuse any split that, correctly, paid our master nothing.
+const ackedSeqs = [];
+const sentBy = new Map(); // share event id -> master it was forwarded for, until its ack arrives
 let mastersKnown = { at: 0, scripts: new Set() };
 async function knownScripts() {
   if (Date.now() - mastersKnown.at < 60000) return mastersKnown.scripts;
@@ -143,7 +148,7 @@ function poolConnect() {
     }
     else if (m.type === 'split') onSplit(m.event);
     else if (m.type === 'assignment') onAssignment(m.event);
-    else if (m.type === 'ack') { const c = contentOf(m.event) ?? {}; if (c.result === 'ok') { pool.acked++; if (c.seq) { ackedSeqs.push(c.seq); if (ackedSeqs.length > 10000) ackedSeqs.shift(); } } else pool.refused++; pool.lastAck = c; if (c.result !== 'ok') log(`pool: share refused: ${c.result}${c.detail ? ' (' + c.detail + ')' : ''}`); }
+    else if (m.type === 'ack') { const c = contentOf(m.event) ?? {}; if (c.result === 'ok') { pool.acked++; const by = sentBy.get(c.share); sentBy.delete(c.share); if (c.seq && by === MASTER) { ackedSeqs.push(c.seq); if (ackedSeqs.length > 10000) ackedSeqs.shift(); } } else pool.refused++; pool.lastAck = c; if (c.result !== 'ok') log(`pool: share refused: ${c.result}${c.detail ? ' (' + c.detail + ')' : ''}`); }
     else if (m.type === 'error') log(`pool: error ${m.error}`);
   };
   ws.onclose = () => { if (pool.connected) log(`pool: disconnected, solo work until it is back`); pool.connected = false; pool.ws = null; pool.backoff = Math.min(pool.backoff * 2, 30000); setTimeout(poolConnect, pool.backoff); if (current) refresh(true).catch(() => {}); };
@@ -236,7 +241,7 @@ const stratum = new StratumServer({ rawLog: !!args['raw-log'], idleSeconds: Numb
   const cs = cstat(client);
   if (!meets(powBytes, target)) { stats.rejected++; cs.rejected++; cs.rejectedDiff += diff; stats.rejectedDiff += diff; return { ok: false, code: 23, reason: 'low difficulty' }; }
   if (seen.has(d.blockHash)) { stats.rejected++; cs.rejected++; cs.rejectedDiff += diff; stats.rejectedDiff += diff; return { ok: false, code: 22, reason: 'duplicate' }; }
-  seen.add(d.blockHash);
+  seen.add(d.blockHash); if (seen.size > 200000) seen.delete(seen.values().next().value); // the set is emptied on a new tip; a chain stuck at a boundary would otherwise grow it forever
   stats.shares++; stats.diff += diff; cs.shares++; cs.diff += diff; cs.lastShare = Date.now(); recent.push([Date.now(), diff]); cs.recent.push([Date.now(), diff]);
   const isBlock = meets(hashBytes, job.networkTarget);
   const stale = job.prev !== current?.prev;
@@ -251,10 +256,10 @@ const stratum = new StratumServer({ rawLog: !!args['raw-log'], idleSeconds: Numb
   const creditable = job.splitId === 'solo' || (a && a.from <= job.height && meets(powBytes, a.targetBytes));
   const throttled = creditable && ++bucket.n > 150;
   const forward = creditable && !throttled;
-  if (forward) poolSend({ type: 'share', event: signEvent(id.key, { kind: 23400, tags: [['chain', NETWORK], ['h', String(job.height)], ['split', job.splitId]], content: {
+  if (forward) { const ev = signEvent(id.key, { kind: 23400, tags: [['chain', NETWORK], ['h', String(job.height)], ['split', job.splitId]], content: {
     chain: NETWORK, height: job.height, header: k.codec.encodeHex('BlockHeader', header), coinbase: k.codec.encodeHex('Transaction', v.block.coinbase), branches: v.branches,
     target: a ? a.target : bytesToHex(target), ...(a ? { assignment: a.id } : {}), split: job.splitId, parents: [], job: job.id, ...(blockHex && job.height <= STOP ? { block: blockHex } : {}),
-  } }) });
+  } }); sentBy.set(ev.id, id.master); if (sentBy.size > 20000) sentBy.delete(sentBy.keys().next().value); poolSend({ type: 'share', event: ev }); }
   else { cs.local = (cs.local ?? 0) + 1; stats.local = (stats.local ?? 0) + 1; }
   log(`share ${d.blockHash.slice(0, 20)}… job ${job.id} h${job.height} diff ${diff} ${user}${id.mode === 'gateway' ? '' : ` (${id.mode} master ${id.master.slice(0, 8)}…)`}${isBlock ? ' BLOCK' : ''}${stale ? ' (stale job)' : ''}${job.splitId === 'solo' ? '' : ' split ' + job.splitId.slice(0, 8)}${forward ? '' : throttled ? ' (local: throttled)' : a ? ' (local: above the assignment target)' : ' (local: no assignment yet)'}`);
   if (isBlock && job.height > STOP) { log(`BLOCK ${d.blockHash} at height ${job.height} NOT submitted: above --stop-height ${STOP}`); return { ok: true }; }
