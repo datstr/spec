@@ -55,7 +55,7 @@ export class StratumServer {
     if (this.clients.size >= this.maxClients || same >= this.maxPerAddress) { this.refused++; this.log(`stratum: ${addr} refused: ${this.clients.size >= this.maxClients ? 'max clients' : 'max per address'}`); return sock.destroy(); }
     const c = { sock, buf: '', subscribed: false, user: null, en1: null, remote: `${sock.remoteAddress}:${sock.remotePort}`, diff: this.difficulty, fixedDiff: null, jobDiff: new Map(), since: Date.now(), sharesSince: 0, lastRetarget: Date.now() };
     this.clients.add(c);
-    sock.setNoDelay(true); sock.setKeepAlive(true, 30000); // a dead peer behind a proxy must not look alive forever
+    sock.setNoDelay?.(true); sock.setKeepAlive?.(true, 30000); // a dead peer behind a proxy must not look alive forever; a socket wrapped over WebSocket may lack these
     c.lastSeen = Date.now();
     sock.on('data', (d) => {
       c.lastSeen = Date.now();

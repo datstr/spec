@@ -390,7 +390,7 @@ if (args.api !== 'false') {
   attachWsServer(server, (client, req) => {
     if (req.url.split('?')[0] !== '/stratum') return client.close();
     const listeners = {};
-    const sock = { remoteAddress: req.socket.remoteAddress, remotePort: req.socket.remotePort, destroyed: false, setNoDelay() {},
+    const sock = { remoteAddress: req.socket.remoteAddress, remotePort: req.socket.remotePort, destroyed: false, setNoDelay() {}, setKeepAlive() {} /* the WebSocket layer keeps itself alive */,
       on(ev, cb) { (listeners[ev] ??= []).push(cb); return sock; },
       write(s) { if (!sock.destroyed) client.send(new TextEncoder().encode(s)); },
       destroy() { if (!sock.destroyed) { sock.destroyed = true; try { client.close(); } catch {} } } };
