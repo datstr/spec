@@ -29,6 +29,11 @@ export class StratumServer {
       for (const c of this.clients) if (c.subscribed && now - (c.lastSeen ?? now) > ms) { this.log(`stratum: ${c.remote} dropped: silent for ${Math.round((now - c.lastSeen) / 1000)} s`); try { c.sock.destroy(); } catch {} } }, 15000);
   }
   oneSharePerJob(c) { return /^sia-test-miner/.test(c.agent ?? ''); }
+  // A CPU miner cannot solve a real-difficulty block and, mining one share per job, sits idle
+  // with no job in hand. While holdCpu is set (the chain is outside its minimum-difficulty
+  // window) such clients get no job at all and go quiet; an ASIC, which can solve the real
+  // block and which a marketplace counts as offline if starved, is never held.
+  heldCpu(c) { return this.holdCpu && this.oneSharePerJob(c); }
   // The same job under a new id, with the header's spare nonce3 (the high half of the ntime field)
   // set to the clone number, so a miner that restarts its search from zero finds a new nonce.
   cloneJob(job) { const n = ++this.clone; const c = { ...job, id: `${job.id}${(n & 0xffff).toString(16).padStart(4, '0')}`, ntimeField: '00000000' + [n & 255, (n >>> 8) & 255, (n >>> 16) & 255, (n >>> 24) & 255].map((b) => b.toString(16).padStart(2, '0')).join('') }; this.jobs.set(c.id, c); return c; }
@@ -68,7 +73,8 @@ export class StratumServer {
 
   // A job may differ per client (its coinbase commits to the client's identity): job.variant(c) says how.
   notify(c, job, clean) {
-    c.jobDiff.set(job.id, c.diff); if (c.jobDiff.size > 128) c.jobDiff.delete(c.jobDiff.keys().next().value); // must outlast the retained jobs, or an old job's share is judged at the wrong difficulty
+    if (this.heldCpu(c)) { c.held = true; return; }
+    c.held = false; c.jobDiff.set(job.id, c.diff); if (c.jobDiff.size > 128) c.jobDiff.delete(c.jobDiff.keys().next().value); // must outlast the retained jobs, or an old job's share is judged at the wrong difficulty
     const v = job.variant ? job.variant(c) : job;
     this.send(c, { id: null, method: 'mining.notify', params: [job.id, v.prevHidden, v.coinb1, '', [], '', v.bits, job.ntimeField ?? v.ntimeField, !!clean] });
   }

@@ -290,7 +290,13 @@ async function refresh(force) {
   // kept hashing the last job, whose shares were stale the moment the tip moved. Serving the current
   // tip at whatever difficulty it has costs the same CPU and every share is proof of work on the
   // real tip, so the flag is now informational only.
-  if (MIN_BITS && !minBitsNoted) { minBitsNoted = true; log(`--min-bits ${MIN_BITS}: noted; work is served at every difficulty, shares stay valid across the hold`); }
+  // --min-bits: outside the chain's minimum-difficulty window, CPU-class miners (one share per
+  // job, no chance at the real block) are given no job and go idle; everything else is served.
+  if (MIN_BITS) {
+    const hold = t.bits.toLowerCase() !== MIN_BITS;
+    if (hold !== !!stratum.holdCpu) log(hold ? `--min-bits ${MIN_BITS}: bits ${t.bits}, CPU miners held until the minimum-difficulty window` : `--min-bits ${MIN_BITS}: window open, CPU miners served`);
+    stratum.holdCpu = hold;
+  }
   // joined to a coordinator but no split for this height yet: give it a moment before going solo
   if (pool.connected && !pool.splits.get(t.height)) {
     if (awaiting?.height !== t.height) awaiting = { height: t.height, since: Date.now() };
@@ -320,7 +326,7 @@ function snapshot() {
     pool: pool.url ? { url: pool.url, connected: pool.connected, pubkey: pool.pubkey, acked: pool.acked, refused: pool.refused, last: pool.lastAck, split: j?.splitId ?? null } : null,
     difficulty: DIFF, stop_height: STOP < Infinity ? STOP : null, min_bits: MIN_BITS, pay: payAddrs,
     work_update_seconds: REFRESH / 1000, poll_seconds: POLL / 1000, node_warnings: nodeWarnings,
-    stratum: { listening: true, connections: stratum.clients.size, subscriptions: [...stratum.clients].filter((c) => c.subscribed).length, hashrate },
+    stratum: { listening: true, connections: stratum.clients.size, subscriptions: [...stratum.clients].filter((c) => c.subscribed).length, hashrate, cpu_held: [...stratum.clients].filter((c) => c.held).length },
     tip: tipInfo && { ...tipInfo, window_opens_at: MIN_DIFF_WINDOW ? tipInfo.time + MIN_DIFF_WINDOW + 1 : null, window_open: j ? j.bits.toLowerCase() === '1d00ffff' : false, network_difficulty: j ? difficultyOfTarget(j.networkTarget) : null },
     shares_accepted: { count: stats.shares, diff: stats.diff }, shares_rejected: { count: stats.rejected, diff: stats.rejectedDiff }, blocks_found: stats.blocks, vardiff: VARDIFF,
     hashrate: { history, interval_seconds: 60 },
