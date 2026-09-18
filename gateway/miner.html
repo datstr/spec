@@ -243,6 +243,8 @@ setInterval(() => {
   }
 }, 1000);
 let ws = null, workers = [], job = null, en1 = null, en2size = 8, en2 = null, target = null, jobKey = 0, pending = new Map(), nextId = 100, tick = null, windowHashes = [];
+let work = null; // the job the workers are on: { key, id, ntime, en2, header, target } — a share is submitted against this, never against a job that arrived meanwhile
+let selfChecks = 0;
 const log = (s, cls) => { const el = $('log'); el.innerHTML += (cls ? `<${cls}>${esc(s)}</${cls}>` : esc(s)) + '\n'; el.scrollTop = el.scrollHeight; };
 const hr = (h) => { const u = ['H/s', 'kH/s', 'MH/s', 'GH/s']; let i = 0; while (h >= 1000 && i < 3) { h /= 1000; i++; } return h.toLocaleString(undefined, { maximumFractionDigits: h < 10 ? 2 : 1 }) + ' ' + u[i]; };
 const tile = (l, b, s) => `<div class="tile"><div class="label">${l}</div><div class="big">${b}</div>${s ? `<div class="sub">${s}</div>` : ''}</div>`;
@@ -271,7 +273,7 @@ async function run() {
     await new Promise((res) => setTimeout(res, 0));
   }
 }`; };
-let engineNoted = false;
+let engineNoted = false, engineName = '?';
 function startWorkers(n) {
   stopWorkers();
   const url = URL.createObjectURL(new Blob([workerSrc()], { type: 'text/javascript' }));
@@ -281,8 +283,8 @@ function stopWorkers() { for (const w of workers) w.terminate(); workers = []; }
 function onWorker(e) {
   const m = e.data;
   if (m.type === 'progress') { stats.hashes += m.hashes; windowHashes.push([Date.now(), m.hashes]); }
-  else if (m.type === 'found' && m.jobKey === jobKey && job) submit(m.nonce);
-  else if (m.type === 'engine') { if (!engineNoted) { engineNoted = true; log(m.engine === 'wasm' ? 'hashing in WebAssembly: BLAKE2b with 64-bit words and the nonce loop inside the module' : m.wanted ? 'hashing in JavaScript: WebAssembly was asked for but did not load in this browser' : 'hashing in JavaScript; tick "webassembly" for about 40x', m.engine === 'wasm' ? 'b' : 'i'); } }
+  else if (m.type === 'found' && work && m.jobKey === work.key) submit(m.nonce, work);
+  else if (m.type === 'engine') { engineName = m.engine; if (!engineNoted) { engineNoted = true; log(m.engine === 'wasm' ? 'hashing in WebAssembly: BLAKE2b with 64-bit words and the nonce loop inside the module' : m.wanted ? 'hashing in JavaScript: WebAssembly was asked for but did not load in this browser' : 'hashing in JavaScript; tick "webassembly" for about 40x', m.engine === 'wasm' ? 'b' : 'i'); } }
 }
 async function dispatch() {
   if (!job || !en1 || !target || !workers.length) return;
@@ -291,12 +293,14 @@ async function dispatch() {
   const { workHeader, bytesToHex } = await import(CORE); const { blake2b } = await import(`${CDN}/codec/pow/blake2b.js`);
   en2 = bytesToHex(crypto.getRandomValues(new Uint8Array(en2size)));
   const header = bytesToHex(workHeader(blake2b, job, en1 + en2));
-  jobKey++;
+  jobKey++; work = { key: jobKey, id: job.id, ntime: job.ntime, en2, header, target: bytesToHex(target) };
   workers.forEach((w, i) => w.postMessage({ type: 'job', header, target: bytesToHex(target), start: i, step: workers.length, jobKey, batch: batchSize(), batchExplicit: !!$('batch').value.trim() }));
 }
 function send(o) { ws?.send(JSON.stringify(o) + '\n'); }
-function submit(nonce) {
-  import(CORE).then(({ nonceField }) => { const id = String(nextId++); pending.set(id, Date.now()); send({ id, method: 'mining.submit', params: [$('user').value.trim(), job.id, en2, job.ntime, nonceField(nonce)] }); log(`share found: nonce ${nonce.toString(16).padStart(8, '0')} on job ${job.id.slice(0, 10)}`); });
+// a rejected share re-hashed here in plain JavaScript: if this says it meets the target, the hasher in the workers agrees with the page and the disagreement is with the gateway; if not, the worker's hasher is wrong
+async function selfCheck(p) { try { const { mine, hexToBytes } = await import(CORE); const { blake2b } = await import(`${CDN}/codec/pow/blake2b.js`); const r = mine(blake2b, hexToBytes(p.work.header), hexToBytes(p.work.target), p.nonce, 1, 1); log(`self-check ${selfChecks}/5: nonce ${p.nonce.toString(16).padStart(8, '0')} re-hashed in JS ${r.nonce === p.nonce ? 'MEETS the target — the gateway disagrees with this page' : 'does NOT meet the target — the worker hasher is wrong'} (engine ${engineName}, ${workers.length} workers)`, 'i'); } catch (e) { log('self-check failed: ' + e.message, 'i'); } }
+function submit(nonce, w) {
+  import(CORE).then(({ nonceField }) => { const id = String(nextId++); pending.set(id, { at: Date.now(), nonce, work: w }); send({ id, method: 'mining.submit', params: [$('user').value.trim(), w.id, w.en2, w.ntime, nonceField(nonce)] }); log(`share found: nonce ${nonce.toString(16).padStart(8, '0')} on job ${w.id.slice(0, 10)}`); });
 }
 async function onLine(line) {
   let m; try { m = JSON.parse(line); } catch { return; }
@@ -304,7 +308,7 @@ async function onLine(line) {
   if (m.id === '2') { log(m.result === true ? 'authorized' : 'authorize refused: ' + JSON.stringify(m.error), m.result === true ? 'b' : 'i'); if (m.result === true && me) identify(); return; }
   if (m.id === '3') { if (m.error) return log('identity: ' + (m.error[1] ?? JSON.stringify(m.error)), 'i'); log(`identity: the gateway derives worker ${m.result.worker.slice(0, 12)}… for my master; signing the descriptor and delegation`); signIdentity(m.result.worker, m.result.chain, m.result.consent, m.result.payout).catch((e) => log('identity: signing failed: ' + e.message, 'i')); return; }
   if (m.id === '4') { if (m.error) return log('identity: refused: ' + (m.error[1] ?? JSON.stringify(m.error)), 'i'); log(`identity: mining as master ${m.result.master.slice(0, 12)}…, paid at ${$('pay').value.trim()}`, 'b'); idline(`Nostr master ${esc(m.result.master.slice(0, 12))}… · paid to ${addrLink($('pay').value.trim())} · worker ${esc(m.result.worker.slice(0, 12))}… on the gateway`, 'good'); return; }
-  if (pending.has(String(m.id))) { pending.delete(String(m.id)); if (m.result === true) { stats.accepted++; log('share accepted', 'b'); bump(earn.perShare || 1, 'share'); } else { stats.rejected++; log('share rejected: ' + (m.error?.[1] ?? JSON.stringify(m.error)), 'i'); } return; }
+  if (pending.has(String(m.id))) { const p = pending.get(String(m.id)); pending.delete(String(m.id)); if (m.result === true) { stats.accepted++; log('share accepted', 'b'); bump(earn.perShare || 1, 'share'); } else { if (/low difficulty/.test(m.error?.[1] ?? '') && p?.work && selfChecks < 5) { selfChecks++; selfCheck(p); } stats.rejected++; log('share rejected: ' + (m.error?.[1] ?? JSON.stringify(m.error)), 'i'); } return; }
   const { parseNotify, targetForDifficulty } = await import(CORE);
   if (m.method === 'mining.set_difficulty') { stats.diff = m.params[0]; target = targetForDifficulty(stats.diff); log(`difficulty ${stats.diff}`); if (job) dispatch(); }
   else if (m.method === 'mining.notify') { job = parseNotify(m.params); stats.job = job.id; log(`job ${job.id}${job.clean ? ' (clean)' : ''}`); dispatch(); }
