@@ -49,7 +49,7 @@ else
 fi
 start_co
 for _ in $(seq 60); do curl -sf "$CO_URL/pool.json" >/dev/null 2>&1 && break; sleep 0.5; done
-curl -sf "$CO_URL/pool.json" >/dev/null || { tail -20 "$WORK/co.log"; fail "coordinator did not start at $CO_URL"; }
+curl -sf "$CO_URL/pool.json" >/dev/null || { tail -n 20 "$WORK/co.log"; fail "coordinator did not start at $CO_URL"; }
 
 step "a master key for B, delegating to B's worker key (made off the gateway)"
 node "$HERE/gateway/delegate.mjs" --new-master --out "$WORK/master-b" | sed 's/^/  /'
@@ -65,7 +65,7 @@ case "$NOCONSENT" in *consent*) echo "  refused without --consent";; *) fail "de
 step "two gateways (B delegated), two miners"
 node "$HERE/gateway/serve.mjs" "${COMMON[@]}" --pay $PAY_A --key $KEY_A --port $ST_A --api $API_A --diff 1 --poll 1 --pool "$CO_WS" > "$WORK/gw-a.log" 2>&1 & PIDS+=($!)
 node "$HERE/gateway/serve.mjs" "${COMMON[@]}" --pay $PAY_B --key $KEY_B --port $ST_B --api $API_B --diff 1 --poll 1 --pool "$CO_WS" --descriptor "$WORK/master-b/descriptor.json" --delegation "$WORK/master-b/delegation-${WORKER_B:0:16}.json" > "$WORK/gw-b.log" 2>&1 & PIDS+=($!)
-waitfor "$WORK/gw-a.log" 'pool: welcome' && waitfor "$WORK/gw-b.log" 'pool: welcome' || { tail -5 "$WORK/gw-a.log" "$WORK/gw-b.log" "$WORK/co.log"; fail "gateways did not join the coordinator"; }
+waitfor "$WORK/gw-a.log" 'pool: welcome' && waitfor "$WORK/gw-b.log" 'pool: welcome' || { tail -n 5 "$WORK/gw-a.log" "$WORK/gw-b.log" "$WORK/co.log"; fail "gateways did not join the coordinator"; }
 # usernames that are not addresses: an address username would make the miner its own identity (SPEC 7)
 "$SIA_TEST_MINER" 127.0.0.1:$ST_A "rig.a" > "$WORK/miner-a.log" 2>&1 & MINER_A=$!; PIDS+=($MINER_A)
 "$SIA_TEST_MINER" 127.0.0.1:$ST_B "rig.b" > "$WORK/miner-b.log" 2>&1 & PIDS+=($!)
@@ -74,7 +74,7 @@ TARGET=$((ACTIVATION + BLOCKS))
 step "mining until height $TARGET (up to ${TIMEOUT}s)"
 deadline=$((SECONDS + TIMEOUT)); h=0
 while [ $SECONDS -lt $deadline ]; do h=$(cli getblockcount 2>/dev/null || echo 0); [ "$h" -ge "$TARGET" ] && break; sleep 1; done
-[ "$h" -ge "$TARGET" ] || { tail -8 "$WORK/co.log" "$WORK/gw-a.log"; fail "no block at $TARGET within ${TIMEOUT}s"; }
+[ "$h" -ge "$TARGET" ] || { tail -n 8 "$WORK/co.log" "$WORK/gw-a.log"; fail "no block at $TARGET within ${TIMEOUT}s"; }
 
 step "the latest block whose split paid both masters follows its snapshot"
 H=""; for h in $(seq $TARGET -1 $((ACTIVATION + 1))); do n=$(python3 -c "import json; print(len(json.load(open('$WORK/co/snapshots/$h.json'))['outputs']))" 2>/dev/null || echo 0); [ "$n" -ge 2 ] && { H=$h; break; }; done
@@ -122,7 +122,7 @@ echo "  block $SH mined solo, one payout output"
 step "coordinator back: window intact, gateways rejoin"
 BEFORE=$(wc -l < "$WORK/co/shares.jsonl")
 start_co; for _ in $(seq 60); do curl -sf "$CO_URL/stats.json" 2>/dev/null | grep -q "\"shares_total\":$BEFORE" && break; sleep 0.5; done
-curl -sf "$CO_URL/stats.json" | grep -q "\"shares_total\":$BEFORE" || { tail -3 "$WORK/co.log"; fail "coordinator did not reload $BEFORE shares"; }
+curl -sf "$CO_URL/stats.json" | grep -q "\"shares_total\":$BEFORE" || { tail -n 3 "$WORK/co.log"; fail "coordinator did not reload $BEFORE shares"; }
 waitfor "$WORK/gw-a.log" 'pool: welcome.*\n.*pool: welcome' 1 || true
 for _ in $(seq 60); do [ "$(grep -c 'pool: welcome' "$WORK/gw-a.log")" -ge 2 ] && [ "$(grep -c 'pool: welcome' "$WORK/gw-b.log")" -ge 2 ] && break; sleep 0.5; done
 [ "$(grep -c 'pool: welcome' "$WORK/gw-a.log")" -ge 2 ] || fail "gateway A did not rejoin"
@@ -148,7 +148,7 @@ sys.exit(0 if j.get('payout')=='pool split' and '$PAY_C' in outs and '$PAY_A' no
   sleep 1
 done
 REFUSED_AFTER=$(grep -c 'REFUSED: my shares' "$WORK/gw-a.log" || true)
-[ "$REFUSED_AFTER" -eq "$REFUSED_BEFORE" ] || { grep 'REFUSED' "$WORK/gw-a.log" | tail -2 | sed 's/^/  /'; fail "gateway A refused a split that pays C and not its own master: the guard counted C's shares as A's"; }
+[ "$REFUSED_AFTER" -eq "$REFUSED_BEFORE" ] || { grep 'REFUSED' "$WORK/gw-a.log" | tail -n 2 | sed 's/^/  /'; fail "gateway A refused a split that pays C and not its own master: the guard counted C's shares as A's"; }
 [ $OK = 1 ] || { curl -sf "http://127.0.0.1:$API_A/stats.json" | python3 -c "import json,sys; s=json.load(sys.stdin); print('  job:', s.get('job',{}).get('payout'), [o['address'] for o in s.get('coinbaser',[])])"; fail "gateway A never served a split paying C and not A within 150s"; }
 echo "  gateway A mines the split paying C and B with its own master out of the window, no refusal"
 deadline=$((SECONDS + 150)); PAID_C=""

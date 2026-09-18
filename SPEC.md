@@ -356,7 +356,12 @@ the network difficulty of the next block in the same units as share weight (8.2)
 target of the coordinator's template when it has one, else the target the chain's rules
 require after its tip. When fewer shares exist than `need`, the window is every share. A share leaves the
 window by weight, not by time, so a miner's expected reward does not depend on when the
-block lands.
+block lands — with one bound: a descriptor may set `windowMaxAge` (seconds), and a share
+older than that at the time of the split is never in the window, however light the recent
+shares are. Without it, a window that cannot fill from recent shares reaches back to whoever
+mined last, and a miner that left keeps being paid for as long as it takes the others to
+outweigh it. The split and the snapshot record the split's time and `windowMaxAge`, so a
+replay reproduces the same window.
 
 On a chain whose template difficulty swings between a floor and the real value, such as
 testnet4 with its twenty-minute minimum-difficulty rule, `windowMultiple × D` is

@@ -7,9 +7,14 @@ export function difficultyOf(targetHex) { // ratum's convention: 2^224 / target,
 
 // The window (9.1): the newest shares whose weights sum to at least `need`, oldest dropped first.
 // `shares` are in credit order; returns the slice that is the window.
-export function windowOf(shares, need) {
+// With `maxAge` (seconds) set, a share older than `now - maxAge` is never in the window however
+// light the recent shares are: a miner that left hours ago is not paid by a window that could
+// not fill without it. A share with no `at` never ages out. `now` is the split's time and is
+// recorded in the snapshot, so a replay reproduces the same window.
+export function windowOf(shares, need, { maxAge = 0, now = null } = {}) {
+  const cutoff = maxAge > 0 && now != null ? now - maxAge : -Infinity;
   let w = 0, i = shares.length;
-  while (i > 0 && w < need) { i--; w += shares[i].weight; }
+  while (i > 0 && w < need && (shares[i - 1].at ?? Infinity) >= cutoff) { i--; w += shares[i].weight; }
   return { shares: shares.slice(i), weight: w, from: i };
 }
 

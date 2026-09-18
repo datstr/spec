@@ -20,7 +20,7 @@ const ledger = ({ id, name, description, currency, entries, extra = {} }) => {
 const didOf = (pubkey) => `did:nostr:${pubkey}`;
 export const KIND = { share: 23400, ack: 23401, assignment: 23402, split: 23403, pool: 33400, miner: 33401, delegation: 33402, snapshot: 33404, block: 33405 };
 const RULES = ['segwit', 'blake2b'];
-const DEFAULTS = { feeBps: 0, feeScript: null, windowMultiple: 2, windowMinWeight: 0, minDifficulty: 1, startDifficulty: 1, vardiffSeconds: 10, assignmentGrace: 120, maxDifficulty: 1e8, minPayout: 546, maxOutputs: 512, staleDepth: 3, splitGrace: 30, poll: 1, splitDelayMs: 500,
+const DEFAULTS = { feeBps: 0, feeScript: null, windowMultiple: 2, windowMinWeight: 0, windowMaxAge: 0, minDifficulty: 1, startDifficulty: 1, vardiffSeconds: 10, assignmentGrace: 120, maxDifficulty: 1e8, minPayout: 546, maxOutputs: 512, staleDepth: 3, splitGrace: 30, poll: 1, splitDelayMs: 500,
   // socket hygiene: connections in all and per remote address, bytes per message, messages per second per connection (burst is twice that)
   maxConnections: 256, maxPerAddress: 16, maxMessageBytes: 4 * 1024 * 1024, maxMessagesPerSecond: 500, helloTimeoutMs: 15000, requireAuth: false };
 
@@ -91,19 +91,20 @@ export class Coordinator {
 
   need() { return Math.max(this.params.windowMultiple * (this.tip?.difficulty ?? 0), this.params.windowMinWeight); }
 
+  windowOpts(now = Math.floor(Date.now() / 1000)) { return { maxAge: this.params.windowMaxAge ?? 0, now }; }
   async issueSplit(height) {
-    const win = windowOf(this.shares, this.need());
+    const at = Math.floor(Date.now() / 1000); const win = windowOf(this.shares, this.need(), this.windowOpts(at));
     const r = computeSplit(win.shares, this.tip.value, this.params, this.owed);
     const outputs = r.outputs.map((o) => [o.script ?? this.masters.get(o.master)?.payout, o.value]).filter(([s]) => s);
     const ev = signEvent(this.key, { kind: KIND.split, tags: [['chain', this.chain], ['h', String(height)]], content: {
-      chain: this.chain, height, outputs, window: { from: win.shares[0]?.seq ?? null, to: win.shares.at(-1)?.seq ?? null, weight: win.weight, need: this.need() }, owed: Object.entries(r.owed),
+      chain: this.chain, height, outputs, window: { from: win.shares[0]?.seq ?? null, to: win.shares.at(-1)?.seq ?? null, weight: win.weight, need: this.need(), maxAge: this.params.windowMaxAge ?? 0, at }, owed: Object.entries(r.owed),
     } });
     const split = { event: ev, height, outputs, window: win, owedAfter: r.owed, W: r.W, sharesUpTo: this.shares.length, issued: Date.now() };
     this.splits.set(height, split);
     for (const h of [...this.splits.keys()]) if (h < height - this.params.staleDepth - 1) this.splits.delete(h);
     const perMaster = {}; for (const s of win.shares) perMaster[s.master] = (perMaster[s.master] ?? 0) + s.weight;
     await writeFile(`${this.dataDir}/snapshots/${height}.json`, JSON.stringify({
-      '@type': 'datstr:LedgerSnapshot', chain: this.chain, height, split: ev.id, tipValue: this.tip.value, need: this.need(), sharesUpTo: this.shares.length,
+      '@type': 'datstr:LedgerSnapshot', chain: this.chain, height, split: ev.id, tipValue: this.tip.value, need: this.need(), maxAge: this.params.windowMaxAge ?? 0, at, sharesUpTo: this.shares.length,
       window: { fromSeq: win.shares[0]?.seq ?? null, toSeq: win.shares.at(-1)?.seq ?? null, weight: win.weight, shares: win.shares.map((s) => s.id) },
       perMaster, outputs, owedBefore: this.owed, owedAfter: r.owed, event: ev,
     }, null, 1));
@@ -424,7 +425,7 @@ export class Coordinator {
 
   snapshot() {
     const now = Date.now();
-    const win = this.tip ? windowOf(this.shares, this.need()) : { shares: [], weight: 0 };
+    const win = this.tip ? windowOf(this.shares, this.need(), this.windowOpts()) : { shares: [], weight: 0 };
     const perMaster = {}; for (const s of win.shares) perMaster[s.master] = (perMaster[s.master] ?? 0) + s.weight;
     const addr = (spk) => scriptToAddress(spk, this.k.params.bech32Hrp) ?? spk;
     const cut = now / 1000 - 600, recent = this.shares.filter((s) => s.at >= cut);

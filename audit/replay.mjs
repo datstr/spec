@@ -33,7 +33,7 @@ const assignmentOk = (ev, c, s) => {
 const shares = lines(await get('shares.jsonl'));
 const snap = JSON.parse(await get(`snapshots/${H}.json`));
 const upTo = shares.slice(0, snap.sharesUpTo);
-const win = windowOf(upTo, snap.need);
+const win = windowOf(upTo, snap.need, { maxAge: snap.maxAge ?? 0, now: snap.at ?? null }); // 9.1: the window as the snapshot saw it
 const r = computeSplit(win.shares, snap.tipValue, params, snap.owedBefore ?? {});
 const outputs = r.outputs.map((o) => [o.script ?? masters.get(o.master)?.payout, o.value]).filter(([s]) => s);
 const same = JSON.stringify(outputs) === JSON.stringify(snap.outputs) && win.weight === snap.window.weight && JSON.stringify(win.shares.map((s) => s.id)) === JSON.stringify(snap.window.shares);
