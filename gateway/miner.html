@@ -212,9 +212,10 @@ async function pollPool() {
       try { const snap = await (await fetch(`${earn.poolBase}/snapshots/${b.height}.json`)).json(); const out = snap.outputs.find(([spk]) => spk === mine?.payout); const sats = out ? out[1] : 0; earn.paidSats += sats; if (sats) earn.paidBlocks++; burst(`Block ${b.height.toLocaleString()} found by the pool${sats ? ` · ${satsOf(sats)} sats to you` : ''}`); log(`BLOCK ${b.height} by the pool${sats ? `: ${satsOf(sats)} sats paid to ${addr.slice(0, 12)}…` : ' (your shares were not in its window yet)'}`, 'b'); } catch {}
     }
     $('winbar').style.width = (earn.W ? Math.min(100, earn.myWeight / earn.W * 100 * 20) : 0) + '%';
-    // expected sats per hour at your measured rate: your slice of the pool's hashrate, times what the pool found in the last hour
-    const perHour = earn.poolRate > 0 && stats.lastRate > 0 ? stats.lastRate / earn.poolRate * earn.V * earn.blocksLastHour : 0;
-    $('winline').textContent = earn.W ? `your share of the pool's window: ${(earn.myWeight / earn.W * 100).toFixed(3)}% (${earn.myWeight.toFixed(4)} of ${earn.W.toFixed(1)})${perHour ? ` · at your rate ≈ ${satsOf(perHour)} sats/hour while mining` : ''} · pool found ${earn.blocksLastHour} block${earn.blocksLastHour === 1 ? '' : 's'} in the last hour` : 'joining the pool\'s window…';
+    // expected sats per hour: your share of the window, times what the pool found in the last hour. (Not your slice of
+    // the pool's recent hashrate: the window holds every share still being paid, which can be hours older than that.)
+    const perHour = earn.W > 0 && earn.myWeight > 0 ? earn.myWeight / earn.W * earn.V * earn.blocksLastHour : 0;
+    $('winline').textContent = earn.W ? `your share of the pool's window: ${(earn.myWeight / earn.W * 100).toFixed(3)}% (${earn.myWeight.toFixed(4)} of ${earn.W.toFixed(1)})${perHour ? ` · ≈ ${satsOf(perHour)} sats/hour at this share` : ''} · pool found ${earn.blocksLastHour} block${earn.blocksLastHour === 1 ? '' : 's'} in the last hour` : 'joining the pool\'s window…';
     $('side').innerHTML = `next block pays you <b>${satsOf(earn.nextLine)} sats</b><br>paid on chain, all time <b>${satsOf(earn.paidAll ?? 0)} sats</b><br>this session: <b>${satsOf(earn.paidSats)} sats</b> in ${earn.paidBlocks} block${earn.paidBlocks === 1 ? '' : 's'}, ${earn.blocksWhileMining} pool block${earn.blocksWhileMining === 1 ? '' : 's'} seen`;
     earn.target = earn.nextLine + (earn.paidAll ?? earn.paidSats);
   } catch {}
