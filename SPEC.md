@@ -204,14 +204,13 @@ the two things it lacks:
   witness commitment, computes the merkle root and the header, and hashes. The template
   never leaves the tab; nothing north of it saw a transaction list.
 
-A share from a web miner then carries what a gateway's share carries and, in addition,
-the header it hashed and the merkle path from its coinbase, so a verifier rebuilds the
-commitment from the coinbase the miner built and not from a job it never had. The
-gateway a web miner submits to verifies the split in that coinbase against the split it
-announced, the value against the template value the share commits to (9.4), and the
-proof of work against the header, and refuses a share whose coinbase pays the wrong
-outputs. A block a web miner finds is submitted by the gateway to its node like any
-other, or by the page to any node that will take it.
+A web miner is then a gateway of one. A share already carries the header, the coinbase
+and the merkle path (section 8), so nothing is added to it: the web miner signs its own
+shares as its own master (a miner descriptor and no delegation, section 4), speaks the
+coordinator's socket (11.1) like any gateway, and the verifier rebuilds the commitment
+from the coinbase the miner built and checks it against the split it issued (8.1), which
+refuses a coinbase that pays the wrong outputs. A block a web miner finds travels in the
+share, and a verifier with a node submits it, as 8.1 already says.
 
 What this does not change: the share format of section 8 stays the outer envelope, a
 web miner's identity and delegation are section 4's, and its split is the same split.
