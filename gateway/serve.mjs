@@ -15,6 +15,7 @@
 //                  coordinator then credits the master and the gateway never holds its key.
 //                  Without them the worker is its own master, paid at --pay.
 //
+// --mempool-relays wss://a,wss://b   SPEC 6.3: publish the node's mempool as kind 23404 events for web nodes (--mempool-every S, default 5)
 // --diff D         the difficulty every miner starts at (ratum's convention: 1 expects 2^32 hashes).
 // --vardiff        on by default: each connection's difficulty moves so it sends a share about
 //                  every --vardiff-target seconds. A miner pins its own with d=<n> in the password.
@@ -42,6 +43,7 @@ import { difficultyOf } from './lib/split.mjs';
 import { StratumServer } from './stratum.mjs';
 import { scriptToAddress } from './lib/address.mjs';
 import { signEvent, randomKey, pubkeyOf, verifyEvent, content as contentOf, signAuth, signConsent, verifyConsent } from './lib/nostr.mjs';
+import { mempoolPublisher } from './lib/mempool-relay.mjs';
 import { coinbaseBranches } from './lib/merkle.mjs';
 import { scaleSplit } from './lib/split.mjs';
 import { addressIdentity, delegatedIdentity, workerForMaster, consentForMaster } from './lib/identity.mjs';
@@ -74,6 +76,10 @@ if (!KEY) {
   else { KEY = randomKey(); await mkdir(f.replace(/\/[^/]+$/, ''), { recursive: true }); await writeFile(f, KEY + '\n', { mode: 0o600 }); log(`new worker key written to ${f}`); }
 }
 const WORKER = pubkeyOf(KEY);
+// SPEC 6.3: --mempool-relays wss://a,wss://b publishes the node's mempool as kind 23404 events (off when absent)
+const MEMPOOL_RELAYS = String(args['mempool-relays'] ?? '').split(',').map((x) => x.trim()).filter(Boolean);
+const mempoolPub = MEMPOOL_RELAYS.length ? mempoolPublisher({ rpc, relays: MEMPOOL_RELAYS, key: KEY, network: NETWORK, log, every: Number(args['mempool-every'] ?? 5) * 1000 }) : null;
+if (mempoolPub) log(`mempool: publishing the node's mempool to ${MEMPOOL_RELAYS.length} relay(s) as kind 23404`);
 const pool = { url: args.pool ?? null, ws: null, connected: false, pubkey: null, splits: new Map(), acked: 0, refused: 0, lastAck: null, backoff: 1000 };
 const DESCRIPTOR = args.descriptor ? JSON.parse(await readFile(args.descriptor, 'utf8')) : null;
 const DELEGATION = args.delegation ? JSON.parse(await readFile(args.delegation, 'utf8')) : null;

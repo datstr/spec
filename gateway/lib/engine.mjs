@@ -17,7 +17,7 @@ export async function loadEngine({ network, activationHeight = 0, headline = '' 
     overlays.push({ graph: { '@graph': [{
       '@id': 'btc:regtest-blake2b', '@type': 'btc:NetworkParams', extends: 'btc:regtest', label: 'regtest-blake2b', name: 'regtest-blake2b',
       powHash: 'knots:blake2b-v2', structVariants: { 'btc:BlockHeader': [{ when: { field: 'version', bit: 31 }, struct: 'knots:BlockHeaderV2' }] },
-      blake2bHeight: activationHeight, blake2bHeadline: headline, rdtsExpiryTime: 4102444800,
+      blake2bHeight: activationHeight, blake2bHeadline: headline, rdtsExpiryTime: 4102444800, unifiedSighashParam: 'blake2bHeight', // as the testnet4 overlay declares it
     }] } });
   }
   const k = createKernel({
