@@ -72,7 +72,8 @@ browser.
   through the kernel, checks the coinbase of every block against the ledger.
 - **browser miner**: a page that builds jobs from a template source, hashes with the
   kernel's miner, and sends shares over the same WebSocket a gateway uses. Slow, and
-  the fastest way to see the whole loop work.
+  the fastest way to see the whole loop work. Its template source is a gateway today;
+  section 6.3 says how it becomes the miner's own node.
 
 ## 4. Identity
 
@@ -174,6 +175,50 @@ the fixed 35-byte `coinb1` (three zero bytes and H2, the commitment to the heade
 first stage) and rolls the 16-byte extranonce, the nonces and the time offset. The
 gateway's job commits to the coinbase through the merkle root and H2, and the share
 carries enough for a verifier to rebuild both.
+
+### 6.3 A web node
+
+A gateway mines what its own node built. The browser miner does not: it hashes a job a
+gateway made, because a tab has had no node. That is the one participant in this spec
+whose block is not its own, and this section closes the gap.
+
+A tab can run a node. The kernel that verifies every share here also validates every
+block rule, and a node in a page exists for the BLAKE2b testnet: it fetches the assumeUTXO
+snapshot at the fork into the origin's private file system, checks its `hash_serialized_3`,
+takes blocks from a served block file with the tip pinned by a signed NIP-333 header event
+from relays, validates each block against its own UTXO set, signatures included, keeps
+undo records for reorgs, and follows the tip. It takes the same shortcuts a pruned node
+with assumeUTXO takes and no others: a trusted snapshot hash, blocks from a mirror rather
+than from peers. It has no mempool, and it builds no block. A web miner is that node plus
+the two things it lacks:
+
+- **A mempool from relays.** A node with a mempool may publish the transactions it would
+  relay, one event per transaction, kind 23404, content the transaction hex, tag `chain` the
+  chain id. A web node subscribes to any number of such publishers, validates every
+  transaction against its own UTXO set and the chain's standardness as the kernel applies
+  it, and keeps what passes. Nothing about ordering, fees or the coinbase travels: an event
+  is one transaction, as a peer's `tx` message is. A publisher that lies is a peer that
+  lies; the receiver's validation is what makes the transaction real to it.
+- **The block, built in the page.** From its mempool the web node selects by fee rate,
+  builds the coinbase exactly as section 6.1 says, with the split it was told and the
+  witness commitment, computes the merkle root and the header, and hashes. The template
+  never leaves the tab; nothing north of it saw a transaction list.
+
+A share from a web miner then carries what a gateway's share carries and, in addition,
+the header it hashed and the merkle path from its coinbase, so a verifier rebuilds the
+commitment from the coinbase the miner built and not from a job it never had. The
+gateway a web miner submits to verifies the split in that coinbase against the split it
+announced, the value against the template value the share commits to (9.4), and the
+proof of work against the header, and refuses a share whose coinbase pays the wrong
+outputs. A block a web miner finds is submitted by the gateway to its node like any
+other, or by the page to any node that will take it.
+
+What this does not change: the share format of section 8 stays the outer envelope, a
+web miner's identity and delegation are section 4's, and its split is the same split.
+What it changes is the sentence a critic can test: every datstr participant, the phone
+included, validates its own chain and builds its own block. A tab with a node from a
+mirror and a mempool from relays is a node in every sense that bears on that sentence,
+and its coinbase is its own.
 
 ## 7. Stratum
 
@@ -670,6 +715,7 @@ Provisional. All in ranges NIP-01 reserves for ephemeral (2xxxx) and addressable
 | 23401 | ack | ephemeral |
 | 23402 | assignment | ephemeral |
 | 23403 | split | ephemeral |
+| 23404 | mempool transaction (6.3) | ephemeral |
 | 33400 | pool descriptor | addressable, `d` = chain |
 | 33401 | miner descriptor | addressable, `d` = master |
 | 33402 | delegation | addressable, `d` = worker |
