@@ -210,7 +210,10 @@ shares as its own master (a miner descriptor and no delegation, section 4), spea
 coordinator's socket (11.1) like any gateway, and the verifier rebuilds the commitment
 from the coinbase the miner built and checks it against the split it issued (8.1), which
 refuses a coinbase that pays the wrong outputs. A block a web miner finds travels in the
-share, and a verifier with a node submits it, as 8.1 already says.
+share, and a verifier with a node submits it, as 8.1 already says. Manners: a share is judged at
+the target the coordinator assigned (8.1), so a web miner given a low one cannot raise it; it
+sends at most a few shares a second and drops the rest, never a block, until vardiff (8.4)
+raises its difficulty. A coordinator may refuse a client that floods it regardless.
 
 What this does not change: the share format of section 8 stays the outer envelope, a
 web miner's identity and delegation are section 4's, and its split is the same split.
