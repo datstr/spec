@@ -1,0 +1,15 @@
+{
+ "name": "full-default",
+ "mode": "full",
+ "target_height": 151926,
+ "headers_s": null,
+ "loadtxoutset_s": null,
+ "usable_s": null,
+ "done_s": 142,
+ "peak_rss_mb": 2292,
+ "cpu_s": 610,
+ "disk_mb": 13029,
+ "args": "",
+ "machine": "32 cores, 64 GB",
+ "date": "2026-09-28T14:30:26.940Z"
+}

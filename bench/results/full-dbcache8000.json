@@ -1,0 +1,15 @@
+{
+ "name": "full-dbcache8000",
+ "mode": "full",
+ "target_height": 151926,
+ "headers_s": null,
+ "loadtxoutset_s": null,
+ "usable_s": null,
+ "done_s": 143,
+ "peak_rss_mb": 2292,
+ "cpu_s": 609,
+ "disk_mb": 13029,
+ "args": "-dbcache=8000",
+ "machine": "32 cores, 64 GB",
+ "date": "2026-09-28T14:32:58.624Z"
+}

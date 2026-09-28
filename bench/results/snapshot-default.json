@@ -1,0 +1,15 @@
+{
+ "name": "snapshot-default",
+ "mode": "snapshot",
+ "target_height": 151926,
+ "headers_s": 1,
+ "loadtxoutset_s": 17,
+ "usable_s": 28,
+ "done_s": 213,
+ "peak_rss_mb": 5091,
+ "cpu_s": 730,
+ "disk_mb": 15815,
+ "args": "",
+ "machine": "32 cores, 64 GB",
+ "date": "2026-09-28T14:36:31.588Z"
+}

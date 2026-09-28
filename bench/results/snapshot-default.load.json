@@ -1,0 +1,7 @@
+{
+  "coins_loaded": 14230182,
+  "tip_hash": "000000000017ec2251d81c8d2ca401c713e98e85196c7f660a4088a7ca57b1cc",
+  "base_height": 150307,
+  "path": "/home/melvin/knots-testnet4/snapshots/utxo-knots-150307.dat"
+}
+loadtxoutset took 17s
