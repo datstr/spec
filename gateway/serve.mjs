@@ -4,7 +4,7 @@
 //
 //   node gateway/serve.mjs --conf <bitcoin.conf> --network btc:testnet4-blake2b --pay <addr>[,<addr>]
 //                          [--port 3333] [--diff 1] [--poll 2] [--refresh 30] [--worker <hex>] [--activation N]
-//                          [--stop-height N] [--min-bits 1d00ffff] [--api 3334]
+//                          [--stop-height N] [--min-bits 1d00ffff] [--window 1200] [--api 3334]
 //                          [--pool ws://host:port/ws] [--key <hex>] [--key-file <path>]
 //                          [--vardiff on|off] [--vardiff-target 10] [--vardiff-min 0.0001] [--vardiff-max 1000000]
 //                          [--descriptor <file> --delegation <file>]
@@ -26,6 +26,9 @@
 //
 // --api N          serve a status page at http://127.0.0.1:N/ and its data at /stats.json
 //
+// --window S       testnet4: serve a minimum-difficulty job only S seconds after the tip (the rule allows
+//                  1200). Longer stretches the epoch, which lowers the real difficulty at the next
+//                  retarget, up to the 4x clamp at 56 days. Real-difficulty jobs are never held.
 // --stop-height N  never mine a height above N: jobs stop and clients are told nothing new.
 //                  For testnet4 before the 151,200 retarget: --stop-height 151198.
 // --min-bits X     accepted for compatibility; no longer holds work. Miners never idle, so
@@ -56,6 +59,7 @@ const NETWORK = args.network ?? 'btc:testnet4-blake2b';
 const RULES = ['segwit', 'blake2b'];
 const DIFF = Number(args.diff ?? 1), POLL = Number(args.poll ?? 2) * 1000, REFRESH = Number(args.refresh ?? 30) * 1000;
 const STOP = args['stop-height'] ? Number(args['stop-height']) : Infinity;
+const WINDOW = args['window'] != null ? Number(args['window']) : null;
 const MIN_BITS = args['min-bits'] ? String(args['min-bits']).toLowerCase() : null;
 const log = (...a) => console.log(new Date().toISOString().slice(11, 19), ...a);
 
@@ -280,12 +284,18 @@ let tipInfo = null; // the block the current job builds on: height, hash, time
 const MIN_DIFF_WINDOW = /testnet4/.test(NETWORK) ? 1200 : null; // testnet4: a min-difficulty block is allowed 20 minutes after the tip
 let holding = null; // why no work is being served, logged once per reason
 let minBitsNoted = false;
+let prevHdr = null; // the tip the template builds on, for --window
 let awaiting = null; const SPLIT_WAIT = Number(args['split-wait'] ?? 3) * 1000;
 function hold(reason) { if (holding !== reason) { holding = reason; log(`holding: ${reason}`); } stratum.pause(true); }
 
 async function refresh(force) {
   let t; try { t = await rpc('getblocktemplate', { rules: RULES }); } catch (e) { log(`getblocktemplate: ${e.message}`); return; }
   if (t.height > STOP) return hold(`height ${t.height} is above --stop-height ${STOP}`);
+  if (WINDOW != null && MIN_DIFF_WINDOW && t.bits.toLowerCase() === '1d00ffff') {
+    if (prevHdr?.hash !== t.previousblockhash) { try { const h = await rpc('getblockheader', t.previousblockhash); prevHdr = { height: h.height, hash: h.hash, time: h.time }; } catch { prevHdr = null; } }
+    const opensAt = prevHdr ? prevHdr.time + WINDOW + 1 : 0;
+    if (Math.floor(Date.now() / 1000) < opensAt) return hold(`--window ${WINDOW}: minimum-difficulty job for h${t.height} held until ${new Date(opensAt * 1000).toISOString().slice(11, 19)} UTC`);
+  }
   // --min-bits used to hold work outside a chain's minimum-difficulty window. Miners never idle: they
   // kept hashing the last job, whose shares were stale the moment the tip moved. Serving the current
   // tip at whatever difficulty it has costs the same CPU and every share is proof of work on the
@@ -327,7 +337,7 @@ function snapshot() {
     difficulty: DIFF, stop_height: STOP < Infinity ? STOP : null, min_bits: MIN_BITS, pay: payAddrs,
     work_update_seconds: REFRESH / 1000, poll_seconds: POLL / 1000, node_warnings: nodeWarnings,
     stratum: { listening: true, connections: stratum.clients.size, subscriptions: [...stratum.clients].filter((c) => c.subscribed).length, hashrate, cpu_held: [...stratum.clients].filter((c) => c.held).length },
-    tip: tipInfo && { ...tipInfo, window_opens_at: MIN_DIFF_WINDOW ? tipInfo.time + MIN_DIFF_WINDOW + 1 : null, window_open: j ? j.bits.toLowerCase() === '1d00ffff' : false, network_difficulty: j ? difficultyOfTarget(j.networkTarget) : null },
+    tip: tipInfo && { ...tipInfo, window_opens_at: MIN_DIFF_WINDOW ? tipInfo.time + (WINDOW ?? MIN_DIFF_WINDOW) + 1 : null, window: WINDOW ?? MIN_DIFF_WINDOW, window_open: j ? j.bits.toLowerCase() === '1d00ffff' : false, network_difficulty: j ? difficultyOfTarget(j.networkTarget) : null },
     shares_accepted: { count: stats.shares, diff: stats.diff }, shares_rejected: { count: stats.rejected, diff: stats.rejectedDiff }, blocks_found: stats.blocks, vardiff: VARDIFF,
     hashrate: { history, interval_seconds: 60 },
     job: j && {
