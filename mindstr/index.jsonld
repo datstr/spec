@@ -1,0 +1,116 @@
+{
+  "@context": {
+    "@vocab": "https://mindstr.org/ns#",
+    "link": {
+      "@type": "@id"
+    },
+    "parent": {
+      "@type": "@id"
+    }
+  },
+  "version": "0.2",
+  "nodes": [
+    {
+      "@id": "#this",
+      "name": "spec",
+      "x": 0,
+      "y": 0,
+      "link": "https://github.com/datstr/spec",
+      "bgColor": "#ebc573"
+    },
+    {
+      "@id": "#jtny2v",
+      "name": "SPEC.md · 31 ›",
+      "x": 248,
+      "y": -30,
+      "link": "./doc-spec.jsonld",
+      "bgColor": "#acd5ff",
+      "parent": "#this"
+    },
+    {
+      "@id": "#zvvi4r",
+      "name": "Open issues · 2",
+      "x": -125,
+      "y": 184,
+      "link": "https://github.com/datstr/spec/issues",
+      "bgColor": "#febdc6",
+      "parent": "#this"
+    },
+    {
+      "@id": "#ezqtt6",
+      "name": "#3 SwiftSync for a web node's initial…",
+      "x": 20,
+      "y": 425,
+      "link": "https://github.com/datstr/spec/issues/3",
+      "bgColor": "#ffe2e6",
+      "parent": "#zvvi4r"
+    },
+    {
+      "@id": "#8edjsn",
+      "name": "#2 Utreexo for web nodes and relay mem…",
+      "x": -519,
+      "y": 239,
+      "link": "https://github.com/datstr/spec/issues/2",
+      "bgColor": "#ffe2e6",
+      "parent": "#zvvi4r"
+    },
+    {
+      "@id": "#75s7ir",
+      "name": "datstr: a decentralized mining share network. The spec.",
+      "x": -94,
+      "y": -197,
+      "link": "https://github.com/datstr/spec",
+      "bgColor": "#ececec",
+      "parent": "#this"
+    },
+    {
+      "@id": "#7x3k79",
+      "name": "since Sep 2026 · last 12 Oct 2026",
+      "x": -313,
+      "y": -331,
+      "link": "https://github.com/datstr/spec/commits/gh-pages",
+      "bgColor": "#ececec",
+      "parent": "#75s7ir"
+    },
+    {
+      "@id": "#4af2dc",
+      "name": "datstr.com/spec",
+      "x": 50,
+      "y": -500,
+      "link": "https://datstr.com/spec/",
+      "bgColor": "#ececec",
+      "parent": "#75s7ir"
+    }
+  ],
+  "connections": [
+    {
+      "start": 0,
+      "end": 1
+    },
+    {
+      "start": 0,
+      "end": 2
+    },
+    {
+      "start": 2,
+      "end": 3
+    },
+    {
+      "start": 2,
+      "end": 4
+    },
+    {
+      "start": 0,
+      "end": 5
+    },
+    {
+      "start": 5,
+      "end": 6
+    },
+    {
+      "start": 5,
+      "end": 7
+    }
+  ],
+  "selectedNode": 0
+}

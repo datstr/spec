@@ -1,5 +1,7 @@
 # datstr
 
+[![Mind map](https://mindstr.org/badge.svg)](https://mindstr.org/?uri=https://datstr.com/spec/mindstr/index.jsonld)
+
 A decentralized mining share network for Bitcoin and its BLAKE2b fork. Miners build
 their own block templates, prove their work with Nostr-signed shares, and are paid
 directly in the coinbase. No custody, no mandatory fee, and every rule a verifier
