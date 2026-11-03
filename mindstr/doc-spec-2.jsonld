@@ -1,0 +1,168 @@
+{
+  "@context": {
+    "@vocab": "https://mindstr.org/ns#",
+    "link": {
+      "@type": "@id"
+    },
+    "parent": {
+      "@type": "@id"
+    }
+  },
+  "version": "0.2",
+  "nodes": [
+    {
+      "@id": "#this",
+      "name": "datstr 2/4",
+      "x": 0,
+      "y": 0,
+      "link": "https://github.com/datstr/spec/blob/gh-pages/SPEC.md#8-share",
+      "bgColor": "#ebc573"
+    },
+    {
+      "@id": "#dsw684",
+      "name": "Share",
+      "x": 228,
+      "y": 25,
+      "link": "https://github.com/datstr/spec/blob/gh-pages/SPEC.md#8-share",
+      "bgColor": "#acd5ff",
+      "parent": "#this"
+    },
+    {
+      "@id": "#v88t4a",
+      "name": "8.1 Verification",
+      "x": 352,
+      "y": -210,
+      "link": "https://github.com/datstr/spec/blob/gh-pages/SPEC.md#81-verification",
+      "bgColor": "#daeeff",
+      "parent": "#dsw684"
+    },
+    {
+      "@id": "#skzt29",
+      "name": "8.2 Weight",
+      "x": 496,
+      "y": -51,
+      "link": "https://github.com/datstr/spec/blob/gh-pages/SPEC.md#82-weight",
+      "bgColor": "#daeeff",
+      "parent": "#dsw684"
+    },
+    {
+      "@id": "#t4pwzt",
+      "name": "8.3 Acknowledgement",
+      "x": 400,
+      "y": 134,
+      "link": "https://github.com/datstr/spec/blob/gh-pages/SPEC.md#83-acknowledgement",
+      "bgColor": "#daeeff",
+      "parent": "#dsw684"
+    },
+    {
+      "@id": "#jhaa84",
+      "name": "8.4 Assignment",
+      "x": 323,
+      "y": 325,
+      "link": "https://github.com/datstr/spec/blob/gh-pages/SPEC.md#84-assignment",
+      "bgColor": "#daeeff",
+      "parent": "#dsw684"
+    },
+    {
+      "@id": "#wavvy9",
+      "name": "Split",
+      "x": -177,
+      "y": 125,
+      "link": "https://github.com/datstr/spec/blob/gh-pages/SPEC.md#9-split",
+      "bgColor": "#febdc6",
+      "parent": "#this"
+    },
+    {
+      "@id": "#i9w3v4",
+      "name": "9.1 Window",
+      "x": -67,
+      "y": 361,
+      "link": "https://github.com/datstr/spec/blob/gh-pages/SPEC.md#91-window",
+      "bgColor": "#ffe2e6",
+      "parent": "#wavvy9"
+    },
+    {
+      "@id": "#e9sufn",
+      "name": "9.2 Outputs",
+      "x": -297,
+      "y": 342,
+      "link": "https://github.com/datstr/spec/blob/gh-pages/SPEC.md#92-outputs",
+      "bgColor": "#ffe2e6",
+      "parent": "#wavvy9"
+    },
+    {
+      "@id": "#g45zx9",
+      "name": "9.3 Message",
+      "x": -386,
+      "y": 161,
+      "link": "https://github.com/datstr/spec/blob/gh-pages/SPEC.md#93-message",
+      "bgColor": "#ffe2e6",
+      "parent": "#wavvy9"
+    },
+    {
+      "@id": "#vz8rhu",
+      "name": "9.4 Template value",
+      "x": -500,
+      "y": -11,
+      "link": "https://github.com/datstr/spec/blob/gh-pages/SPEC.md#94-template-value",
+      "bgColor": "#ffe2e6",
+      "parent": "#wavvy9"
+    },
+    {
+      "@id": "#35gtrs",
+      "name": "← datstr",
+      "x": -68,
+      "y": -187,
+      "link": "./doc-spec.jsonld",
+      "bgColor": "#ececec",
+      "parent": "#this"
+    }
+  ],
+  "connections": [
+    {
+      "start": 0,
+      "end": 1
+    },
+    {
+      "start": 1,
+      "end": 2
+    },
+    {
+      "start": 1,
+      "end": 3
+    },
+    {
+      "start": 1,
+      "end": 4
+    },
+    {
+      "start": 1,
+      "end": 5
+    },
+    {
+      "start": 0,
+      "end": 6
+    },
+    {
+      "start": 6,
+      "end": 7
+    },
+    {
+      "start": 6,
+      "end": 8
+    },
+    {
+      "start": 6,
+      "end": 9
+    },
+    {
+      "start": 6,
+      "end": 10
+    },
+    {
+      "start": 0,
+      "end": 11
+    }
+  ],
+  "selectedNode": 0
+}

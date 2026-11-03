@@ -19,67 +19,76 @@
       "bgColor": "#ebc573"
     },
     {
-      "@id": "#jtny2v",
-      "name": "SPEC.md · 31 ›",
-      "x": 248,
-      "y": -30,
-      "link": "./doc-spec.jsonld",
+      "@id": "#7iui3z",
+      "name": "Live site",
+      "x": 215,
+      "y": 70,
+      "link": "https://datstr.com/spec/",
       "bgColor": "#acd5ff",
       "parent": "#this"
     },
     {
-      "@id": "#zvvi4r",
-      "name": "Open issues · 2",
-      "x": -125,
-      "y": 184,
-      "link": "https://github.com/datstr/spec/issues",
+      "@id": "#bq9ccn",
+      "name": "A decentralized mining share network for Bitcoin and its…",
+      "x": 419,
+      "y": -82,
+      "link": "https://datstr.com/spec/",
+      "bgColor": "#daeeff",
+      "parent": "#7iui3z"
+    },
+    {
+      "@id": "#3yirdr",
+      "name": "datstr.com/spec",
+      "x": 356,
+      "y": 205,
+      "link": "https://datstr.com/spec/",
+      "bgColor": "#daeeff",
+      "parent": "#7iui3z"
+    },
+    {
+      "@id": "#ptf2jy",
+      "name": "since Sep 2026 · last 12 Oct 2026",
+      "x": 160,
+      "y": 339,
+      "link": "https://github.com/datstr/spec/commits/gh-pages",
+      "bgColor": "#ececec",
+      "parent": "#7iui3z"
+    },
+    {
+      "@id": "#4bfy6j",
+      "name": "SPEC.md · 31 ›",
+      "x": -182,
+      "y": 119,
+      "link": "./doc-spec.jsonld",
       "bgColor": "#febdc6",
       "parent": "#this"
     },
     {
-      "@id": "#ezqtt6",
-      "name": "#3 SwiftSync for a web node's initial…",
-      "x": 20,
-      "y": 425,
-      "link": "https://github.com/datstr/spec/issues/3",
-      "bgColor": "#ffe2e6",
-      "parent": "#zvvi4r"
-    },
-    {
-      "@id": "#8edjsn",
-      "name": "#2 Utreexo for web nodes and relay mem…",
-      "x": -519,
-      "y": 239,
-      "link": "https://github.com/datstr/spec/issues/2",
-      "bgColor": "#ffe2e6",
-      "parent": "#zvvi4r"
-    },
-    {
-      "@id": "#75s7ir",
-      "name": "datstr: a decentralized mining share network. The spec.",
-      "x": -94,
-      "y": -197,
-      "link": "https://github.com/datstr/spec",
-      "bgColor": "#ececec",
+      "@id": "#4wkdd9",
+      "name": "Open issues · 2",
+      "x": -111,
+      "y": -171,
+      "link": "https://github.com/datstr/spec/issues",
+      "bgColor": "#c1dba8",
       "parent": "#this"
     },
     {
-      "@id": "#7x3k79",
-      "name": "since Sep 2026 · last 12 Oct 2026",
-      "x": -313,
-      "y": -331,
-      "link": "https://github.com/datstr/spec/commits/gh-pages",
-      "bgColor": "#ececec",
-      "parent": "#75s7ir"
+      "@id": "#yiscsp",
+      "name": "#3 SwiftSync for a web node's initial…",
+      "x": -346,
+      "y": -216,
+      "link": "https://github.com/datstr/spec/issues/3",
+      "bgColor": "#e3f0d8",
+      "parent": "#4wkdd9"
     },
     {
-      "@id": "#4af2dc",
-      "name": "datstr.com/spec",
-      "x": 50,
-      "y": -500,
-      "link": "https://datstr.com/spec/",
-      "bgColor": "#ececec",
-      "parent": "#75s7ir"
+      "@id": "#2fzfhg",
+      "name": "#2 Utreexo for web nodes and relay mem…",
+      "x": -33,
+      "y": -364,
+      "link": "https://github.com/datstr/spec/issues/2",
+      "bgColor": "#e3f0d8",
+      "parent": "#4wkdd9"
     }
   ],
   "connections": [
@@ -88,15 +97,15 @@
       "end": 1
     },
     {
-      "start": 0,
+      "start": 1,
       "end": 2
     },
     {
-      "start": 2,
+      "start": 1,
       "end": 3
     },
     {
-      "start": 2,
+      "start": 1,
       "end": 4
     },
     {
@@ -104,12 +113,16 @@
       "end": 5
     },
     {
-      "start": 5,
+      "start": 0,
       "end": 6
     },
     {
-      "start": 5,
+      "start": 6,
       "end": 7
+    },
+    {
+      "start": 6,
+      "end": 8
     }
   ],
   "selectedNode": 0

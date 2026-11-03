@@ -1,0 +1,168 @@
+{
+  "@context": {
+    "@vocab": "https://mindstr.org/ns#",
+    "link": {
+      "@type": "@id"
+    },
+    "parent": {
+      "@type": "@id"
+    }
+  },
+  "version": "0.2",
+  "nodes": [
+    {
+      "@id": "#this",
+      "name": "datstr 1/4",
+      "x": 0,
+      "y": 0,
+      "link": "https://github.com/datstr/spec/blob/gh-pages/SPEC.md#1-principles",
+      "bgColor": "#ebc573"
+    },
+    {
+      "@id": "#ab9ysn",
+      "name": "Principles",
+      "x": 182,
+      "y": -119,
+      "link": "https://github.com/datstr/spec/blob/gh-pages/SPEC.md#1-principles",
+      "bgColor": "#acd5ff",
+      "parent": "#this"
+    },
+    {
+      "@id": "#qhtzie",
+      "name": "Layers",
+      "x": 228,
+      "y": 26,
+      "link": "https://github.com/datstr/spec/blob/gh-pages/SPEC.md#2-layers",
+      "bgColor": "#d9c6fb",
+      "parent": "#this"
+    },
+    {
+      "@id": "#2sgmjt",
+      "name": "Roles",
+      "x": 140,
+      "y": 155,
+      "link": "https://github.com/datstr/spec/blob/gh-pages/SPEC.md#3-roles",
+      "bgColor": "#f9bdd5",
+      "parent": "#this"
+    },
+    {
+      "@id": "#j9h6ge",
+      "name": "Identity",
+      "x": -30,
+      "y": 194,
+      "link": "https://github.com/datstr/spec/blob/gh-pages/SPEC.md#4-identity",
+      "bgColor": "#fcc2a9",
+      "parent": "#this"
+    },
+    {
+      "@id": "#ejt2c7",
+      "name": "Chains",
+      "x": -182,
+      "y": 119,
+      "link": "https://github.com/datstr/spec/blob/gh-pages/SPEC.md#5-chains",
+      "bgColor": "#e0d199",
+      "parent": "#this"
+    },
+    {
+      "@id": "#tvx8v7",
+      "name": "Work",
+      "x": -228,
+      "y": -26,
+      "link": "https://github.com/datstr/spec/blob/gh-pages/SPEC.md#6-work",
+      "bgColor": "#b1dfb5",
+      "parent": "#this"
+    },
+    {
+      "@id": "#4bfmpa",
+      "name": "6.1 Coinbase",
+      "x": -428,
+      "y": 32,
+      "link": "https://github.com/datstr/spec/blob/gh-pages/SPEC.md#61-coinbase",
+      "bgColor": "#ddf2de",
+      "parent": "#tvx8v7"
+    },
+    {
+      "@id": "#c2mpq8",
+      "name": "6.2 Header",
+      "x": -426,
+      "y": -48,
+      "link": "https://github.com/datstr/spec/blob/gh-pages/SPEC.md#62-header",
+      "bgColor": "#ddf2de",
+      "parent": "#tvx8v7"
+    },
+    {
+      "@id": "#yykmee",
+      "name": "6.3 A web node",
+      "x": -404,
+      "y": -126,
+      "link": "https://github.com/datstr/spec/blob/gh-pages/SPEC.md#63-a-web-node",
+      "bgColor": "#ddf2de",
+      "parent": "#tvx8v7"
+    },
+    {
+      "@id": "#7kgwkb",
+      "name": "Stratum",
+      "x": -140,
+      "y": -155,
+      "link": "https://github.com/datstr/spec/blob/gh-pages/SPEC.md#7-stratum",
+      "bgColor": "#95e1e3",
+      "parent": "#this"
+    },
+    {
+      "@id": "#x7t4w7",
+      "name": "← datstr",
+      "x": 30,
+      "y": -194,
+      "link": "./doc-spec.jsonld",
+      "bgColor": "#ececec",
+      "parent": "#this"
+    }
+  ],
+  "connections": [
+    {
+      "start": 0,
+      "end": 1
+    },
+    {
+      "start": 0,
+      "end": 2
+    },
+    {
+      "start": 0,
+      "end": 3
+    },
+    {
+      "start": 0,
+      "end": 4
+    },
+    {
+      "start": 0,
+      "end": 5
+    },
+    {
+      "start": 0,
+      "end": 6
+    },
+    {
+      "start": 6,
+      "end": 7
+    },
+    {
+      "start": 6,
+      "end": 8
+    },
+    {
+      "start": 6,
+      "end": 9
+    },
+    {
+      "start": 0,
+      "end": 10
+    },
+    {
+      "start": 0,
+      "end": 11
+    }
+  ],
+  "selectedNode": 0
+}

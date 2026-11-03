@@ -12,320 +12,53 @@
   "nodes": [
     {
       "@id": "#this",
-      "name": "datstr",
+      "name": "datstr · 18",
       "x": 0,
       "y": 0,
       "link": "https://github.com/datstr/spec/blob/gh-pages/SPEC.md#datstr",
       "bgColor": "#ebc573"
     },
     {
-      "@id": "#ab9ysn",
-      "name": "sections 1/3",
-      "x": 240,
-      "y": -58,
+      "@id": "#ezqtt6",
+      "name": "Principles → Stratum ›",
+      "x": 210,
+      "y": -80,
+      "link": "./doc-spec-1.jsonld",
       "bgColor": "#acd5ff",
       "parent": "#this"
     },
     {
-      "@id": "#qhtzie",
-      "name": "Principles",
-      "x": 334,
-      "y": -316,
-      "link": "https://github.com/datstr/spec/blob/gh-pages/SPEC.md#1-principles",
-      "bgColor": "#daeeff",
-      "parent": "#ab9ysn"
-    },
-    {
-      "@id": "#2sgmjt",
-      "name": "Layers",
-      "x": 464,
-      "y": -310,
-      "link": "https://github.com/datstr/spec/blob/gh-pages/SPEC.md#2-layers",
-      "bgColor": "#daeeff",
-      "parent": "#ab9ysn"
-    },
-    {
-      "@id": "#j9h6ge",
-      "name": "Roles",
-      "x": 440,
-      "y": -201,
-      "link": "https://github.com/datstr/spec/blob/gh-pages/SPEC.md#3-roles",
-      "bgColor": "#daeeff",
-      "parent": "#ab9ysn"
-    },
-    {
-      "@id": "#ejt2c7",
-      "name": "Identity",
-      "x": 560,
-      "y": -158,
-      "link": "https://github.com/datstr/spec/blob/gh-pages/SPEC.md#4-identity",
-      "bgColor": "#daeeff",
-      "parent": "#ab9ysn"
-    },
-    {
-      "@id": "#tvx8v7",
-      "name": "Chains",
-      "x": 494,
-      "y": -63,
-      "link": "https://github.com/datstr/spec/blob/gh-pages/SPEC.md#5-chains",
-      "bgColor": "#daeeff",
-      "parent": "#ab9ysn"
-    },
-    {
-      "@id": "#4bfmpa",
-      "name": "Work",
-      "x": 583,
-      "y": 76,
-      "link": "https://github.com/datstr/spec/blob/gh-pages/SPEC.md#6-work",
-      "bgColor": "#daeeff",
-      "parent": "#ab9ysn"
-    },
-    {
-      "@id": "#c2mpq8",
-      "name": "6.1 Coinbase",
-      "x": 750,
-      "y": 20,
-      "link": "https://github.com/datstr/spec/blob/gh-pages/SPEC.md#61-coinbase",
-      "bgColor": "#daeeff",
-      "parent": "#4bfmpa"
-    },
-    {
-      "@id": "#yykmee",
-      "name": "6.2 Header",
-      "x": 830,
-      "y": 108,
-      "link": "https://github.com/datstr/spec/blob/gh-pages/SPEC.md#62-header",
-      "bgColor": "#daeeff",
-      "parent": "#4bfmpa"
-    },
-    {
-      "@id": "#7kgwkb",
-      "name": "6.3 A web node",
-      "x": 722,
-      "y": 172,
-      "link": "https://github.com/datstr/spec/blob/gh-pages/SPEC.md#63-a-web-node",
-      "bgColor": "#daeeff",
-      "parent": "#4bfmpa"
-    },
-    {
-      "@id": "#x7t4w7",
-      "name": "sections 2/3",
-      "x": -87,
-      "y": 199,
-      "bgColor": "#f3bee1",
+      "@id": "#8edjsn",
+      "name": "Share → Split ›",
+      "x": 154,
+      "y": 145,
+      "link": "./doc-spec-2.jsonld",
+      "bgColor": "#e9c1ef",
       "parent": "#this"
     },
     {
-      "@id": "#dsw684",
-      "name": "Stratum",
-      "x": 343,
-      "y": 309,
-      "link": "https://github.com/datstr/spec/blob/gh-pages/SPEC.md#7-stratum",
-      "bgColor": "#fce3f3",
-      "parent": "#x7t4w7"
-    },
-    {
-      "@id": "#v88t4a",
-      "name": "Share",
-      "x": 191,
-      "y": 475,
-      "link": "https://github.com/datstr/spec/blob/gh-pages/SPEC.md#8-share",
-      "bgColor": "#fce3f3",
-      "parent": "#x7t4w7"
-    },
-    {
-      "@id": "#skzt29",
-      "name": "8.1 Verification",
-      "x": 386,
-      "y": 547,
-      "link": "https://github.com/datstr/spec/blob/gh-pages/SPEC.md#81-verification",
-      "bgColor": "#fce3f3",
-      "parent": "#v88t4a"
-    },
-    {
-      "@id": "#t4pwzt",
-      "name": "8.2 Weight",
-      "x": 327,
-      "y": 660,
-      "link": "https://github.com/datstr/spec/blob/gh-pages/SPEC.md#82-weight",
-      "bgColor": "#fce3f3",
-      "parent": "#v88t4a"
-    },
-    {
-      "@id": "#jhaa84",
-      "name": "8.3 Acknowledgement",
-      "x": 192,
-      "y": 615,
-      "link": "https://github.com/datstr/spec/blob/gh-pages/SPEC.md#83-acknowledgement",
-      "bgColor": "#fce3f3",
-      "parent": "#v88t4a"
-    },
-    {
-      "@id": "#wavvy9",
-      "name": "8.4 Assignment",
-      "x": 100,
-      "y": 709,
-      "link": "https://github.com/datstr/spec/blob/gh-pages/SPEC.md#84-assignment",
-      "bgColor": "#fce3f3",
-      "parent": "#v88t4a"
-    },
-    {
-      "@id": "#i9w3v4",
-      "name": "Split",
-      "x": -162,
-      "y": 402,
-      "link": "https://github.com/datstr/spec/blob/gh-pages/SPEC.md#9-split",
-      "bgColor": "#fce3f3",
-      "parent": "#x7t4w7"
-    },
-    {
-      "@id": "#e9sufn",
-      "name": "9.1 Window",
-      "x": -93,
-      "y": 633,
-      "link": "https://github.com/datstr/spec/blob/gh-pages/SPEC.md#91-window",
-      "bgColor": "#fce3f3",
-      "parent": "#i9w3v4"
-    },
-    {
-      "@id": "#g45zx9",
-      "name": "9.2 Outputs",
-      "x": -217,
-      "y": 690,
-      "link": "https://github.com/datstr/spec/blob/gh-pages/SPEC.md#92-outputs",
-      "bgColor": "#fce3f3",
-      "parent": "#i9w3v4"
-    },
-    {
-      "@id": "#vz8rhu",
-      "name": "9.3 Message",
-      "x": -283,
-      "y": 588,
-      "link": "https://github.com/datstr/spec/blob/gh-pages/SPEC.md#93-message",
-      "bgColor": "#fce3f3",
-      "parent": "#i9w3v4"
-    },
-    {
-      "@id": "#35gtrs",
-      "name": "9.4 Template value",
-      "x": -432,
-      "y": 615,
-      "link": "https://github.com/datstr/spec/blob/gh-pages/SPEC.md#94-template-value",
-      "bgColor": "#fce3f3",
-      "parent": "#i9w3v4"
-    },
-    {
-      "@id": "#fiqrfa",
-      "name": "Anti-withholding",
-      "x": -401,
-      "y": 368,
-      "link": "https://github.com/datstr/spec/blob/gh-pages/SPEC.md#10-anti-withholding",
-      "bgColor": "#fce3f3",
-      "parent": "#x7t4w7"
-    },
-    {
-      "@id": "#fad69b",
-      "name": "Documents",
-      "x": -447,
-      "y": 190,
-      "link": "https://github.com/datstr/spec/blob/gh-pages/SPEC.md#11-documents",
-      "bgColor": "#fce3f3",
-      "parent": "#x7t4w7"
-    },
-    {
-      "@id": "#fnrzmm",
-      "name": "11.1 Transport",
-      "x": -614,
-      "y": 367,
-      "link": "https://github.com/datstr/spec/blob/gh-pages/SPEC.md#111-transport",
-      "bgColor": "#fce3f3",
-      "parent": "#fad69b"
-    },
-    {
-      "@id": "#3y3s3p",
-      "name": "11.2 Track record on the chain: Blocktrails",
-      "x": -777,
-      "y": 271,
-      "link": "https://github.com/datstr/spec/blob/gh-pages/SPEC.md#112-track-record-on-the-chain-blocktrails",
-      "bgColor": "#fce3f3",
-      "parent": "#fad69b"
-    },
-    {
-      "@id": "#ujs2ci",
-      "name": "Levels",
-      "x": -587,
-      "y": 52,
-      "link": "https://github.com/datstr/spec/blob/gh-pages/SPEC.md#12-levels",
-      "bgColor": "#fce3f3",
-      "parent": "#x7t4w7"
-    },
-    {
-      "@id": "#442pm7",
-      "name": "sections 3/3",
-      "x": -161,
-      "y": -162,
-      "bgColor": "#f1c99c",
+      "@id": "#75s7ir",
+      "name": "Anti-withholding → Appendix A. Event kinds ›",
+      "x": -115,
+      "y": 169,
+      "link": "./doc-spec-3.jsonld",
+      "bgColor": "#fec0b1",
       "parent": "#this"
     },
     {
-      "@id": "#imr4n9",
-      "name": "Acceptance test",
-      "x": -458,
-      "y": -170,
-      "link": "https://github.com/datstr/spec/blob/gh-pages/SPEC.md#13-acceptance-test",
-      "bgColor": "#fbe8d3",
-      "parent": "#442pm7"
+      "@id": "#7x3k79",
+      "name": "Appendix B. Prior art → Appendix B. Prior a… ›",
+      "x": -225,
+      "y": -64,
+      "link": "./doc-spec-4.jsonld",
+      "bgColor": "#d7d59b",
+      "parent": "#this"
     },
     {
-      "@id": "#tpktj6",
-      "name": "Reserved",
-      "x": -492,
-      "y": -277,
-      "link": "https://github.com/datstr/spec/blob/gh-pages/SPEC.md#14-reserved",
-      "bgColor": "#fbe8d3",
-      "parent": "#442pm7"
-    },
-    {
-      "@id": "#u94rpy",
-      "name": "Compatibility",
-      "x": -363,
-      "y": -292,
-      "link": "https://github.com/datstr/spec/blob/gh-pages/SPEC.md#15-compatibility",
-      "bgColor": "#fbe8d3",
-      "parent": "#442pm7"
-    },
-    {
-      "@id": "#7txfyn",
-      "name": "Threats",
-      "x": -364,
-      "y": -402,
-      "link": "https://github.com/datstr/spec/blob/gh-pages/SPEC.md#16-threats",
-      "bgColor": "#fbe8d3",
-      "parent": "#442pm7"
-    },
-    {
-      "@id": "#v5njcx",
-      "name": "Appendix A. Event kinds",
-      "x": -210,
-      "y": -383,
-      "link": "https://github.com/datstr/spec/blob/gh-pages/SPEC.md#appendix-a-event-kinds",
-      "bgColor": "#fbe8d3",
-      "parent": "#442pm7"
-    },
-    {
-      "@id": "#z8kicz",
-      "name": "Appendix B. Prior art",
-      "x": -147,
-      "y": -486,
-      "link": "https://github.com/datstr/spec/blob/gh-pages/SPEC.md#appendix-b-prior-art",
-      "bgColor": "#fbe8d3",
-      "parent": "#442pm7"
-    },
-    {
-      "@id": "#7348h9",
+      "@id": "#4af2dc",
       "name": "← spec",
-      "x": 58,
-      "y": -207,
+      "x": -24,
+      "y": -194,
       "link": "./index.jsonld",
       "bgColor": "#ececec",
       "parent": "#this"
@@ -337,140 +70,20 @@
       "end": 1
     },
     {
-      "start": 1,
+      "start": 0,
       "end": 2
     },
     {
-      "start": 1,
+      "start": 0,
       "end": 3
     },
     {
-      "start": 1,
+      "start": 0,
       "end": 4
     },
     {
-      "start": 1,
+      "start": 0,
       "end": 5
-    },
-    {
-      "start": 1,
-      "end": 6
-    },
-    {
-      "start": 1,
-      "end": 7
-    },
-    {
-      "start": 7,
-      "end": 8
-    },
-    {
-      "start": 7,
-      "end": 9
-    },
-    {
-      "start": 7,
-      "end": 10
-    },
-    {
-      "start": 0,
-      "end": 11
-    },
-    {
-      "start": 11,
-      "end": 12
-    },
-    {
-      "start": 11,
-      "end": 13
-    },
-    {
-      "start": 13,
-      "end": 14
-    },
-    {
-      "start": 13,
-      "end": 15
-    },
-    {
-      "start": 13,
-      "end": 16
-    },
-    {
-      "start": 13,
-      "end": 17
-    },
-    {
-      "start": 11,
-      "end": 18
-    },
-    {
-      "start": 18,
-      "end": 19
-    },
-    {
-      "start": 18,
-      "end": 20
-    },
-    {
-      "start": 18,
-      "end": 21
-    },
-    {
-      "start": 18,
-      "end": 22
-    },
-    {
-      "start": 11,
-      "end": 23
-    },
-    {
-      "start": 11,
-      "end": 24
-    },
-    {
-      "start": 24,
-      "end": 25
-    },
-    {
-      "start": 24,
-      "end": 26
-    },
-    {
-      "start": 11,
-      "end": 27
-    },
-    {
-      "start": 0,
-      "end": 28
-    },
-    {
-      "start": 28,
-      "end": 29
-    },
-    {
-      "start": 28,
-      "end": 30
-    },
-    {
-      "start": 28,
-      "end": 31
-    },
-    {
-      "start": 28,
-      "end": 32
-    },
-    {
-      "start": 28,
-      "end": 33
-    },
-    {
-      "start": 28,
-      "end": 34
-    },
-    {
-      "start": 0,
-      "end": 35
     }
   ],
   "selectedNode": 0
